@@ -1,10 +1,12 @@
-# Notchprompt
+# Presentation Companion
 
 <p align="center">
-  <img src="assets/banner.png" alt="Notchprompt Banner" width="100%">
+  <img src="assets/banner.png" alt="Presentation Companion Banner" width="100%">
 </p>
 
-Native macOS notch-adjacent teleprompter for presentations and recordings.
+Native teleprompter companion for presentations and recordings. The macOS app
+uses a notch-adjacent overlay, and the iOS app provides a touch-first prompt
+surface for iPhone and iPad.
 
 ## Quick Demo
 
@@ -12,10 +14,10 @@ Native macOS notch-adjacent teleprompter for presentations and recordings.
 > launch.
 
 <!--
-![Notchprompt hero screenshot](docs/media/hero.png)
+![Presentation Companion hero screenshot](docs/media/hero.png)
 *Hero view of the overlay panel and settings workflow.*
 
-![Notchprompt scrolling demo GIF](docs/media/notchprompt-demo.gif)
+![Presentation Companion scrolling demo GIF](docs/media/notchprompt-demo.gif)
 *In-use scrolling demo with start/pause and speed adjustments.*
 -->
 
@@ -27,7 +29,7 @@ Native macOS notch-adjacent teleprompter for presentations and recordings.
 - Click the left third of the script area to scroll back; double-click to scroll back twice the configured pace.
 - Click the middle third to start, pause, or resume.
 - Click the right third to scroll forward; double-click to scroll forward twice the configured pace.
-- Adjustable speed, font size, overlay width, overlay height, opacity, and scrolling pace.
+- Adjustable speed, font size, overlay width, overlay height, opacity, and fast forward/backward scrolling pace.
 - Resize the prompt overlay directly with the bottom-right resize handle; the window recenters after resizing.
 - Optional countdown before scrolling starts.
 - Edit scripts directly in Settings with a scrollable, resizable text area.
@@ -40,15 +42,16 @@ Native macOS notch-adjacent teleprompter for presentations and recordings.
 
 - macOS version supported by the current deployment target in
   `notchprompt.xcodeproj`.
-- Apple Silicon or Intel Mac.
+- Apple Silicon or Intel Mac for the macOS app.
+- iPhone or iPad running iOS 17 or later for the iOS app.
 
 ## Install (Recommended)
 
 1. Open GitHub Releases:
    `https://github.com/techtony2018/notchprompt/releases`
 2. Download the latest `.dmg` release asset.
-3. Open the DMG and drag `notchprompt.app` to `Applications`.
-4. Launch `notchprompt.app`.
+3. Open the DMG and drag `Presentation Companion.app` to `Applications`.
+4. Launch `Presentation Companion.app`.
 
 ### Unsigned Build Note
 
@@ -56,20 +59,20 @@ This build is currently unsigned/unnotarized, so macOS may show security prompts
 
 If macOS shows:
 
-- `Apple could not verify "notchprompt" is free of malware...`
-- or `"notchprompt" is damaged and can’t be opened`
+- `Apple could not verify "Presentation Companion" is free of malware...`
+- or `"Presentation Companion" is damaged and can’t be opened`
 
 run:
 
 ```bash
-xattr -cr /Applications/notchprompt.app
-open /Applications/notchprompt.app
+xattr -cr "/Applications/Presentation Companion.app"
+open "/Applications/Presentation Companion.app"
 ```
 
 If it is still blocked:
 
 1. Open `System Settings -> Privacy & Security`.
-2. Click **Open Anyway** for `notchprompt`.
+2. Click **Open Anyway** for `Presentation Companion`.
 3. Launch again.
 
 ## Keyboard Shortcuts
@@ -96,6 +99,7 @@ CLI build:
 
 ```bash
 xcodebuild -project notchprompt.xcodeproj -scheme notchprompt -configuration Debug build
+xcodebuild -project notchprompt.xcodeproj -scheme "Presentation Companion" -configuration Debug -sdk iphonesimulator build
 ```
 
 ## License

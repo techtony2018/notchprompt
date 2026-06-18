@@ -7,7 +7,9 @@
 	objects = {
 
 /* Begin PBXFileReference section */
-		B0503AFB2F39940800CD83D8 /* notchprompt.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = notchprompt.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		B0503AFB2F39940800CD83D8 /* Presentation Companion.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Presentation Companion.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		C0A000000000000000000001 /* Presentation Companion.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Presentation Companion.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		C0B000000000000000000001 /* Presentation CompanionUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "Presentation CompanionUITests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -16,10 +18,34 @@
 			path = notchprompt;
 			sourceTree = "<group>";
 		};
+		C0A000000000000000000002 /* notchpromptiOS */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = notchpromptiOS;
+			sourceTree = "<group>";
+		};
+		C0B000000000000000000002 /* notchpromptiOSUITests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = notchpromptiOSUITests;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		B0503AF82F39940800CD83D8 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C0A000000000000000000003 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C0B000000000000000000003 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -33,6 +59,8 @@
 			isa = PBXGroup;
 			children = (
 				B0503AFD2F39940800CD83D8 /* notchprompt */,
+				C0A000000000000000000002 /* notchpromptiOS */,
+				C0B000000000000000000002 /* notchpromptiOSUITests */,
 				B0503AFC2F39940800CD83D8 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -40,7 +68,9 @@
 		B0503AFC2F39940800CD83D8 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				B0503AFB2F39940800CD83D8 /* notchprompt.app */,
+				B0503AFB2F39940800CD83D8 /* Presentation Companion.app */,
+				C0A000000000000000000001 /* Presentation Companion.app */,
+				C0B000000000000000000001 /* Presentation CompanionUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -67,10 +97,65 @@
 			packageProductDependencies = (
 			);
 			productName = notchprompt;
-			productReference = B0503AFB2F39940800CD83D8 /* notchprompt.app */;
+			productReference = B0503AFB2F39940800CD83D8 /* Presentation Companion.app */;
 			productType = "com.apple.product-type.application";
 		};
+		C0A000000000000000000006 /* Presentation Companion */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = C0A000000000000000000009 /* Build configuration list for PBXNativeTarget "Presentation Companion" */;
+			buildPhases = (
+				C0A000000000000000000005 /* Sources */,
+				C0A000000000000000000003 /* Frameworks */,
+				C0A000000000000000000004 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				C0A000000000000000000002 /* notchpromptiOS */,
+			);
+			name = "Presentation Companion";
+			packageProductDependencies = (
+			);
+			productName = "Presentation Companion";
+			productReference = C0A000000000000000000001 /* Presentation Companion.app */;
+			productType = "com.apple.product-type.application";
+		};
+		C0B000000000000000000006 /* Presentation CompanionUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = C0B000000000000000000009 /* Build configuration list for PBXNativeTarget "Presentation CompanionUITests" */;
+			buildPhases = (
+				C0B000000000000000000005 /* Sources */,
+				C0B000000000000000000003 /* Frameworks */,
+				C0B000000000000000000004 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				C0B00000000000000000000B /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				C0B000000000000000000002 /* notchpromptiOSUITests */,
+			);
+			name = "Presentation CompanionUITests";
+			packageProductDependencies = (
+			);
+			productName = "Presentation CompanionUITests";
+			productReference = C0B000000000000000000001 /* Presentation CompanionUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
 /* End PBXNativeTarget section */
+
+/* Begin PBXContainerItemProxy section */
+		C0B00000000000000000000A /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = B0503AF32F39940800CD83D8 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = C0A000000000000000000006;
+			remoteInfo = "Presentation Companion";
+		};
+/* End PBXContainerItemProxy section */
 
 /* Begin PBXProject section */
 		B0503AF32F39940800CD83D8 /* Project object */ = {
@@ -82,6 +167,13 @@
 				TargetAttributes = {
 					B0503AFA2F39940800CD83D8 = {
 						CreatedOnToolsVersion = 26.2;
+					};
+					C0A000000000000000000006 = {
+						CreatedOnToolsVersion = 26.5;
+					};
+					C0B000000000000000000006 = {
+						CreatedOnToolsVersion = 26.5;
+						TestTargetID = C0A000000000000000000006;
 					};
 				};
 			};
@@ -100,12 +192,28 @@
 			projectRoot = "";
 			targets = (
 				B0503AFA2F39940800CD83D8 /* notchprompt */,
+				C0A000000000000000000006 /* Presentation Companion */,
+				C0B000000000000000000006 /* Presentation CompanionUITests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		B0503AF92F39940800CD83D8 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C0A000000000000000000004 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C0B000000000000000000004 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -122,7 +230,29 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		C0A000000000000000000005 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C0B000000000000000000005 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		C0B00000000000000000000B /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = C0A000000000000000000006 /* Presentation Companion */;
+			targetProxy = C0B00000000000000000000A /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		B0503B042F39940900CD83D8 /* Debug */ = {
@@ -267,6 +397,7 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readwrite;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "Presentation Companion";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Notchprompt uses the local microphone to pause scrolling when you stop speaking and resume when you continue.";
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -276,7 +407,7 @@
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MARKETING_VERSION = 1.1.3;
 				PRODUCT_BUNDLE_IDENTIFIER = notch.notchprompt;
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_NAME = "Presentation Companion";
 				REGISTER_APP_GROUPS = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -302,6 +433,7 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readwrite;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "Presentation Companion";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Notchprompt uses the local microphone to pause scrolling when you stop speaking and resume when you continue.";
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -311,11 +443,128 @@
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MARKETING_VERSION = 1.1.3;
 				PRODUCT_BUNDLE_IDENTIFIER = notch.notchprompt;
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_NAME = "Presentation Companion";
 				REGISTER_APP_GROUPS = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		C0A000000000000000000007 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 3;
+				DEAD_CODE_STRIPPING = YES;
+				DEVELOPMENT_TEAM = 337RL45QSK;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "Presentation Companion";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.1.3;
+				PRODUCT_BUNDLE_IDENTIFIER = "notch.presentation-companion";
+				PRODUCT_NAME = "Presentation Companion";
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		C0A000000000000000000008 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 3;
+				DEAD_CODE_STRIPPING = YES;
+				DEVELOPMENT_TEAM = 337RL45QSK;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "Presentation Companion";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.1.3;
+				PRODUCT_BUNDLE_IDENTIFIER = "notch.presentation-companion";
+				PRODUCT_NAME = "Presentation Companion";
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		C0B000000000000000000007 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 3;
+				DEVELOPMENT_TEAM = 337RL45QSK;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.1.3;
+				PRODUCT_BUNDLE_IDENTIFIER = "notch.presentation-companion.ui-tests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = "Presentation Companion";
+			};
+			name = Debug;
+		};
+		C0B000000000000000000008 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 3;
+				DEVELOPMENT_TEAM = 337RL45QSK;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.1.3;
+				PRODUCT_BUNDLE_IDENTIFIER = "notch.presentation-companion.ui-tests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = "Presentation Companion";
 			};
 			name = Release;
 		};
@@ -336,6 +585,24 @@
 			buildConfigurations = (
 				B0503B072F39940900CD83D8 /* Debug */,
 				B0503B082F39940900CD83D8 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		C0A000000000000000000009 /* Build configuration list for PBXNativeTarget "Presentation Companion" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				C0A000000000000000000007 /* Debug */,
+				C0A000000000000000000008 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		C0B000000000000000000009 /* Build configuration list for PBXNativeTarget "Presentation CompanionUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				C0B000000000000000000007 /* Debug */,
+				C0B000000000000000000008 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
