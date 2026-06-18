@@ -20,6 +20,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var settingsWindowController: SettingsWindowController?
     private var scriptEditorWindowController: ScriptEditorWindowController?
     private var cancellables: Set<AnyCancellable> = []
+    private var voiceMonitor: LocalMicrophoneVoiceMonitor?
 
     private var startPauseItem: NSMenuItem?
     private var showOverlayItem: NSMenuItem?
@@ -78,7 +79,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             .throttle(for: .milliseconds(16), scheduler: RunLoop.main, latest: true)
             .receive(on: RunLoop.main)
             .sink { [weak self] _, _ in
-                self?.overlayController?.reposition()
+                self?.overlayController?.scheduleReposition()
             }
             .store(in: &cancellables)
 
@@ -86,7 +87,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             .removeDuplicates()
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
-                self?.overlayController?.reposition()
+                self?.overlayController?.scheduleReposition()
+            }
+            .store(in: &cancellables)
+
+        Publishers.CombineLatest(model.$autoPauseResumeWithLocalMic, model.$autoAdjustSpeedToVoicePace)
+            .map { $0 || $1 }
+            .removeDuplicates()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] enabled in
+                self?.setVoiceMonitorEnabled(enabled)
             }
             .store(in: &cancellables)
 
@@ -96,7 +106,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 #if DEBUG
                 print("[Notchprompt] didChangeScreenParametersNotification")
 #endif
-                self?.overlayController?.reposition()
+                self?.overlayController?.scheduleReposition()
             }
             .store(in: &cancellables)
 
@@ -104,10 +114,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             model.$script.map { _ in () }.eraseToAnyPublisher(),
             model.$isRunning.map { _ in () }.eraseToAnyPublisher(),
             model.$privacyModeEnabled.map { _ in () }.eraseToAnyPublisher(),
+            model.$clickContentTogglesPlayback.map { _ in () }.eraseToAnyPublisher(),
+            model.$autoPauseResumeWithLocalMic.map { _ in () }.eraseToAnyPublisher(),
+            model.$autoAdjustSpeedToVoicePace.map { _ in () }.eraseToAnyPublisher(),
             model.$speedPointsPerSecond.map { _ in () }.eraseToAnyPublisher(),
             model.$fontSize.map { _ in () }.eraseToAnyPublisher(),
             model.$overlayWidth.map { _ in () }.eraseToAnyPublisher(),
             model.$overlayHeight.map { _ in () }.eraseToAnyPublisher(),
+            model.$backgroundOpacity.map { _ in () }.eraseToAnyPublisher(),
+            model.$scrollingPaceSeconds.map { _ in () }.eraseToAnyPublisher(),
             model.$countdownSeconds.map { _ in () }.eraseToAnyPublisher(),
             model.$countdownBehavior.map { _ in () }.eraseToAnyPublisher(),
             model.$scrollMode.map { _ in () }.eraseToAnyPublisher(),
@@ -118,6 +133,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             self?.model.saveToDefaults()
         }
         .store(in: &cancellables)
+    }
+
+    private func setVoiceMonitorEnabled(_ enabled: Bool) {
+        guard enabled else {
+            voiceMonitor?.stop()
+            voiceMonitor = nil
+            model.clearVoiceMonitorState()
+            return
+        }
+
+        if voiceMonitor == nil {
+            voiceMonitor = LocalMicrophoneVoiceMonitor(
+                onVoiceActivityChanged: { [weak self] isVoiceActive in
+                    guard let self else { return }
+                    if isVoiceActive {
+                        self.model.resumeBecauseVoiceStarted()
+                    } else {
+                        self.model.pauseBecauseVoiceStopped()
+                    }
+                },
+                onSpeakingPaceChanged: { [weak self] wordsPerMinute in
+                    self?.model.updateVoicePace(wordsPerMinute: wordsPerMinute)
+                },
+                onUnavailable: { [weak self] message in
+                    self?.model.setVoiceMonitorUnavailable(message)
+                }
+            )
+        }
+
+        voiceMonitor?.start()
     }
 
     private func setupEditMenu() {

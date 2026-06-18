@@ -11,14 +11,17 @@ import CoreGraphics
 
 struct ContentView: View {
     @ObservedObject private var model = PrompterModel.shared
+    @State private var scriptEditorHeight: CGFloat = 180
+    @State private var scriptEditorResizeStartHeight: CGFloat?
 
     private let rowLabelWidth: CGFloat = 164
-    private let valueWidth: CGFloat = 56
+    private let valueWidth: CGFloat = 64
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 headerSection
+                scriptSection
                 playbackSection
                 appearanceSection
                 displaySection
@@ -41,6 +44,44 @@ struct ContentView: View {
                 .foregroundStyle(.secondary)
         }
         .padding(.bottom, 2)
+    }
+
+    private var scriptSection: some View {
+        SettingsSection(title: "Script") {
+            VStack(alignment: .leading, spacing: 6) {
+                TextEditor(text: $model.script)
+                    .font(.system(size: 13, design: .monospaced))
+                    .scrollContentBackground(.hidden)
+                    .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 6))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6)
+                            .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
+                    )
+                    .frame(minHeight: 120)
+                    .frame(height: scriptEditorHeight)
+
+                HStack {
+                    Spacer(minLength: 0)
+                    Image(systemName: "arrow.up.left.and.arrow.down.right")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .padding(6)
+                        .contentShape(Rectangle())
+                        .gesture(
+                            DragGesture()
+                                .onChanged { value in
+                                    let startHeight = scriptEditorResizeStartHeight ?? scriptEditorHeight
+                                    scriptEditorResizeStartHeight = startHeight
+                                    scriptEditorHeight = min(max(120, startHeight + value.translation.height), 520)
+                                }
+                                .onEnded { _ in
+                                    scriptEditorResizeStartHeight = nil
+                                }
+                        )
+                }
+                .frame(height: 18)
+            }
+        }
     }
 
     private var playbackSection: some View {
@@ -95,6 +136,29 @@ struct ContentView: View {
                     )
                     .disabled(model.countdownBehavior == .never)
                 )
+
+                sliderRow(
+                    title: "Fast forward/backward scrolling pace",
+                    valueText: "\(Int(model.scrollingPaceSeconds))s",
+                    slider: Slider(value: $model.scrollingPaceSeconds, in: 1...30, step: 1)
+                )
+
+                Toggle("Click content area to start, pause, or resume", isOn: $model.clickContentTogglesPlayback)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Toggle("Auto pause/resume from local mic", isOn: $model.autoPauseResumeWithLocalMic)
+                    Toggle("Auto adjust speed to speaking pace", isOn: $model.autoAdjustSpeedToVoicePace)
+                    if let message = model.voiceControlUnavailableMessage {
+                        Text(message)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                    if let wordsPerMinute = model.detectedVoiceWordsPerMinute {
+                        Text("Detected pace: \(Int(wordsPerMinute.rounded())) wpm")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
             }
         }
     }
@@ -118,6 +182,12 @@ struct ContentView: View {
                     title: "Overlay height",
                     valueText: "\(Int(model.overlayHeight))",
                     slider: Slider(value: $model.overlayHeight, in: 120...300, step: 2)
+                )
+
+                sliderRow(
+                    title: "Opacity",
+                    valueText: "\(Int((model.backgroundOpacity * 100).rounded()))%",
+                    slider: Slider(value: $model.backgroundOpacity, in: 0.35...1.0, step: 0.05)
                 )
             }
         }

@@ -52,8 +52,26 @@ private final class ClickThroughHostingView<Content: View>: NSHostingView<Conten
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
 
+enum OverlayGeometry {
+    static func centeredTopFrame(
+        screenFrame: NSRect,
+        width: CGFloat,
+        height: CGFloat,
+        padding: CGFloat
+    ) -> NSRect {
+        let roundedWidth = width.rounded()
+        let roundedHeight = height.rounded()
+        return NSRect(
+            x: (screenFrame.midX - (roundedWidth / 2)).rounded(),
+            y: (screenFrame.maxY - roundedHeight - padding).rounded(),
+            width: roundedWidth,
+            height: roundedHeight
+        )
+    }
+}
+
 @MainActor
-final class OverlayWindowController {
+final class OverlayWindowController: NSObject {
     private let model: PrompterModel
     private let panel: NSPanel
     // Keep this at 0 to hug the notch/menu bar boundary like other notch-adjacent apps.
@@ -61,6 +79,8 @@ final class OverlayWindowController {
     private let padding: CGFloat = 0
     private let inMenuBarStrip: Bool = true
     private var lastFrame: NSRect?
+    private var isApplyingFrame = false
+    private var hasPendingReposition = false
 
     init(model: PrompterModel) {
         self.model = model
@@ -86,12 +106,15 @@ final class OverlayWindowController {
         panel.hasShadow = false
         panel.titleVisibility = .hidden
         panel.titlebarAppearsTransparent = true
+        panel.animationBehavior = .none
         panel.ignoresMouseEvents = false
         panel.becomesKeyOnlyIfNeeded = false
         panel.sharingType = model.privacyModeEnabled ? .none : .readOnly
 
         panel.contentView = hosting
         self.panel = panel
+
+        super.init()
 
         reposition()
 
@@ -120,40 +143,45 @@ final class OverlayWindowController {
     }
 
     func reposition() {
+        hasPendingReposition = false
         guard let screen = targetScreen() ?? NSScreen.main ?? NSScreen.screens.first else { return }
 
         let width = CGFloat(model.overlayWidth)
         let desiredHeight = CGFloat(model.overlayHeight)
 
-        let x = (screen.frame.midX - (width / 2)).rounded()
-
         // Always pin to the very top of the physical screen so we cover the notch/menu bar
         // even when macOS auto-hides the menu bar (reservedTop may report as 0).
         let height = desiredHeight
         let topRefY = screen.frame.maxY
-        let y = (topRefY - height - padding).rounded()
-        let targetFrame = NSRect(x: x, y: y, width: width.rounded(), height: height.rounded())
+        let targetFrame = OverlayGeometry.centeredTopFrame(
+            screenFrame: screen.frame,
+            width: width,
+            height: height,
+            padding: padding
+        )
 
 #if DEBUG
         debugDump(
             reason: "reposition-pre",
             intendedScreen: screen,
-            calc: Calc(width: width, height: height, padding: padding, x: x, y: y, topSafeY: topRefY)
+            calc: Calc(
+                width: width,
+                height: height,
+                padding: padding,
+                x: targetFrame.origin.x,
+                y: targetFrame.origin.y,
+                topSafeY: topRefY
+            )
         )
 #endif
 
-        let shouldAnimate: Bool
-        if let lastFrame {
-            let movedEnough = abs(lastFrame.origin.x - targetFrame.origin.x) > 0.5 ||
-                abs(lastFrame.origin.y - targetFrame.origin.y) > 0.5
-            let resizedEnough = abs(lastFrame.size.width - targetFrame.size.width) > 0.5 ||
-                abs(lastFrame.size.height - targetFrame.size.height) > 0.5
-            shouldAnimate = movedEnough || resizedEnough
-        } else {
-            shouldAnimate = false
+        if let lastFrame, lastFrame.equalTo(targetFrame) {
+            return
         }
 
-        panel.setFrame(targetFrame, display: true, animate: shouldAnimate)
+        isApplyingFrame = true
+        panel.setFrame(targetFrame, display: true, animate: false)
+        isApplyingFrame = false
         lastFrame = targetFrame
         
         // Ensure level is re-applied in case something reset it
@@ -164,9 +192,24 @@ final class OverlayWindowController {
         debugDump(
             reason: "reposition-post",
             intendedScreen: screen,
-            calc: Calc(width: width, height: height, padding: padding, x: x, y: y, topSafeY: topRefY)
+            calc: Calc(
+                width: width,
+                height: height,
+                padding: padding,
+                x: targetFrame.origin.x,
+                y: targetFrame.origin.y,
+                topSafeY: topRefY
+            )
         )
 #endif
+    }
+
+    func scheduleReposition() {
+        guard !hasPendingReposition, !isApplyingFrame else { return }
+        hasPendingReposition = true
+        DispatchQueue.main.async { [weak self] in
+            self?.reposition()
+        }
     }
 
     func setPrivacyMode(_ enabled: Bool) {

@@ -23,10 +23,17 @@ Native macOS notch-adjacent teleprompter for presentations and recordings.
 
 - Menu bar utility workflow (`NP` status item).
 - Notch-adjacent floating overlay with transport controls.
-- Start/pause, reset, and jump back 5 seconds.
-- Adjustable speed, font size, overlay width, and overlay height.
+- Start/pause, reset, and configurable jump controls.
+- Click the left third of the script area to scroll back; double-click to scroll back twice the configured pace.
+- Click the middle third to start, pause, or resume.
+- Click the right third to scroll forward; double-click to scroll forward twice the configured pace.
+- Adjustable speed, font size, overlay width, overlay height, opacity, and scrolling pace.
+- Resize the prompt overlay directly with the bottom-right resize handle; the window recenters after resizing.
 - Optional countdown before scrolling starts.
+- Edit scripts directly in Settings with a scrollable, resizable text area.
 - Import/export plain text scripts.
+- Optional local-microphone controls for auto pause/resume and automatic speed adjustment based on speaking pace.
+- Voice-triggered resume is blocked after a mouse pause until you click to resume, so Q&A audio does not restart the script.
 - Privacy mode (`NSWindow.SharingType`, best-effort/app-dependent).
 
 ## Requirements
@@ -38,7 +45,7 @@ Native macOS notch-adjacent teleprompter for presentations and recordings.
 ## Install (Recommended)
 
 1. Open GitHub Releases:
-   `https://github.com/saif0200/notchprompt/releases`
+   `https://github.com/techtony2018/notchprompt/releases`
 2. Download the latest `.dmg` release asset.
 3. Open the DMG and drag `notchprompt.app` to `Applications`.
 4. Launch `notchprompt.app`.
@@ -73,13 +80,14 @@ If it is still blocked:
 | `⌥⌘R` | Reset scroll |
 | `⌥⌘J` | Jump back 5s |
 | `⌥⌘H` | Toggle Privacy Mode |
+| `⌥⌘O` | Toggle overlay visibility |
 | `⌥⌘=` | Increase speed |
 | `⌥⌘-` | Decrease speed |
 
 ## Build From Source
 
 ```bash
-git clone https://github.com/saif0200/notchprompt.git
+git clone https://github.com/techtony2018/notchprompt.git
 cd notchprompt
 open notchprompt.xcodeproj
 ```

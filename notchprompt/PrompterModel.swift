@@ -45,6 +45,11 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
     @Published var manualScrollEnabled: Bool = false
     @Published var isOverlayVisible: Bool = true
     @Published var privacyModeEnabled: Bool = true
+    @Published var clickContentTogglesPlayback: Bool = true
+    @Published var autoPauseResumeWithLocalMic: Bool = false
+    @Published var autoAdjustSpeedToVoicePace: Bool = false
+    @Published var voiceControlUnavailableMessage: String?
+    @Published private(set) var detectedVoiceWordsPerMinute: Double?
     @Published private(set) var hasStartedSession: Bool = false
     @Published private(set) var isCountingDown: Bool = false
     @Published var countdownSeconds: Int = 3
@@ -57,8 +62,8 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
     @Published var fontSize: Double = 20
     @Published var overlayWidth: Double = 600
     @Published var overlayHeight: Double = 150
-    // Deprecated user setting: keep as a fixed constant unless changed explicitly in code.
     @Published var backgroundOpacity: Double = 1.0
+    @Published var scrollingPaceSeconds: Double = 5
     @Published var scrollMode: ScrollMode = .infinite
     /// 0 means "auto" (prefer built-in display)
     @Published var selectedScreenID: CGDirectDisplayID = 0
@@ -75,6 +80,8 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
 
     private var countdownTask: Task<Void, Never>?
     private var shouldUseCountdownOnNextStart: Bool = true
+    private var isPausedByVoiceMonitor: Bool = false
+    private var isVoiceResumeBlockedByMousePause: Bool = false
 
     static let speedRange: ClosedRange<Double> = 10...300
     static let speedStep: Double = 5
@@ -88,10 +95,16 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
         static let isRunning = "isRunning"
         static let isOverlayVisible = "isOverlayVisible"
         static let privacyModeEnabled = "privacyModeEnabled"
+        static let clickContentTogglesPlayback = "clickContentTogglesPlayback"
+        static let clickContentDefaultEnabledMigration = "clickContentDefaultEnabledMigration"
+        static let autoPauseResumeWithLocalMic = "autoPauseResumeWithLocalMic"
+        static let autoAdjustSpeedToVoicePace = "autoAdjustSpeedToVoicePace"
         static let speed = "speedPointsPerSecond"
         static let fontSize = "fontSize"
         static let overlayWidth = "overlayWidth"
         static let overlayHeight = "overlayHeight"
+        static let backgroundOpacity = "backgroundOpacity"
+        static let scrollingPaceSeconds = "scrollingPaceSeconds"
         static let countdownSeconds = "countdownSeconds"
         static let countdownBehavior = "countdownBehavior"
         static let scrollMode = "scrollMode"
@@ -131,9 +144,30 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
         jumpBackToken = UUID()
     }
 
+    func jumpForward(seconds: Double = 5) {
+        guard seconds > 0 else { return }
+        didReachEndInStopMode = false
+        hasStartedSession = true
+        manualScrollDeltaPoints = CGFloat(speedPointsPerSecond * seconds)
+        manualScrollToken = UUID()
+    }
+
+    func handleContentClick(horizontalFraction: CGFloat, clickCount: Int) {
+        let multiplier = clickCount >= 2 ? 2.0 : 1.0
+        let seconds = scrollingPaceSeconds * multiplier
+
+        if horizontalFraction < (1.0 / 3.0) {
+            jumpBack(seconds: seconds)
+        } else if horizontalFraction > (2.0 / 3.0) {
+            jumpForward(seconds: seconds)
+        } else {
+            toggleFromContentClick()
+        }
+    }
+
     func switchPlaybackModeFromOverlayControl() {
         if isRunning || isCountingDown {
-            stop()
+            pauseFromMouseInteraction()
             manualScrollEnabled = true
             didReachEndInStopMode = false
             hasStartedSession = true
@@ -142,7 +176,29 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
         }
 
         manualScrollEnabled = false
-        start()
+        resumeFromMouseInteraction()
+    }
+
+    func toggleFromContentClick() {
+        guard clickContentTogglesPlayback else { return }
+        toggleFromMouseInteraction()
+    }
+
+    func pauseBecauseVoiceStopped() {
+        guard autoPauseResumeWithLocalMic, isRunning || isCountingDown else { return }
+        stop()
+        isPausedByVoiceMonitor = true
+        manualScrollEnabled = false
+    }
+
+    func resumeBecauseVoiceStarted() {
+        guard autoPauseResumeWithLocalMic,
+              !isVoiceResumeBlockedByMousePause,
+              isPausedByVoiceMonitor,
+              !isRunning,
+              !isCountingDown else { return }
+        isPausedByVoiceMonitor = false
+        resumeWithoutCountdown()
     }
 
     func handleManualScroll(deltaPoints: CGFloat) {
@@ -176,6 +232,7 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
             return
         }
 
+        isPausedByVoiceMonitor = false
         manualScrollEnabled = false
 
         if scrollMode == .stopAtEnd, didReachEndInStopMode {
@@ -241,6 +298,31 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
         isRunning = false
     }
 
+    func setVoiceMonitorUnavailable(_ message: String?) {
+        voiceControlUnavailableMessage = message
+        if message != nil {
+            autoPauseResumeWithLocalMic = false
+            isPausedByVoiceMonitor = false
+        }
+    }
+
+    func clearVoiceMonitorState() {
+        voiceControlUnavailableMessage = nil
+        isPausedByVoiceMonitor = false
+        isVoiceResumeBlockedByMousePause = false
+        detectedVoiceWordsPerMinute = nil
+    }
+
+    func updateVoicePace(wordsPerMinute: Double) {
+        let clampedWordsPerMinute = clamp(wordsPerMinute, lower: 90, upper: 230)
+        detectedVoiceWordsPerMinute = clampedWordsPerMinute
+        guard autoAdjustSpeedToVoicePace else { return }
+
+        let target = Self.speedPresetNormal * (clampedWordsPerMinute / 160.0)
+        let smoothed = (speedPointsPerSecond * 0.82) + (target * 0.18)
+        setSpeed(smoothed)
+    }
+
     func setSpeed(_ value: Double) {
         speedPointsPerSecond = clampedSpeed(value)
     }
@@ -252,6 +334,11 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
 
     func applySpeedPreset(_ preset: Double) {
         setSpeed(preset)
+    }
+
+    func resizeOverlay(widthDelta: Double, heightDelta: Double) {
+        overlayWidth = clamp(overlayWidth + widthDelta, lower: 400, upper: 1200)
+        overlayHeight = clamp(overlayHeight + heightDelta, lower: 120, upper: 300)
     }
 
     var estimatedReadDuration: TimeInterval {
@@ -289,6 +376,14 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
         }
 
         privacyModeEnabled = defaults.object(forKey: DefaultsKey.privacyModeEnabled) as? Bool ?? privacyModeEnabled
+        if defaults.object(forKey: DefaultsKey.clickContentDefaultEnabledMigration) == nil {
+            clickContentTogglesPlayback = true
+            defaults.set(true, forKey: DefaultsKey.clickContentDefaultEnabledMigration)
+        } else {
+            clickContentTogglesPlayback = defaults.object(forKey: DefaultsKey.clickContentTogglesPlayback) as? Bool ?? clickContentTogglesPlayback
+        }
+        autoPauseResumeWithLocalMic = defaults.object(forKey: DefaultsKey.autoPauseResumeWithLocalMic) as? Bool ?? autoPauseResumeWithLocalMic
+        autoAdjustSpeedToVoicePace = defaults.object(forKey: DefaultsKey.autoAdjustSpeedToVoicePace) as? Bool ?? autoAdjustSpeedToVoicePace
         isOverlayVisible = defaults.object(forKey: DefaultsKey.isOverlayVisible) as? Bool ?? true
         // Never auto-start on launch; require explicit user start each session.
         isRunning = false
@@ -296,13 +391,14 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
         countdownRemaining = 0
         hasStartedSession = false
         shouldUseCountdownOnNextStart = true
+        isPausedByVoiceMonitor = false
+        isVoiceResumeBlockedByMousePause = false
         speedPointsPerSecond = clampedSpeed(defaults.object(forKey: DefaultsKey.speed) as? Double ?? speedPointsPerSecond)
         fontSize = clamp(defaults.object(forKey: DefaultsKey.fontSize) as? Double ?? fontSize, lower: 12, upper: 40)
         overlayWidth = clamp(defaults.object(forKey: DefaultsKey.overlayWidth) as? Double ?? overlayWidth, lower: 400, upper: 1200)
         overlayHeight = clamp(defaults.object(forKey: DefaultsKey.overlayHeight) as? Double ?? overlayHeight, lower: 120, upper: 300)
-        // Opacity UI has been removed; always render fully opaque by default.
-        backgroundOpacity = 1.0
-        defaults.removeObject(forKey: "backgroundOpacity")
+        backgroundOpacity = clamp(defaults.object(forKey: DefaultsKey.backgroundOpacity) as? Double ?? backgroundOpacity, lower: 0.35, upper: 1.0)
+        scrollingPaceSeconds = clamp(defaults.object(forKey: DefaultsKey.scrollingPaceSeconds) as? Double ?? scrollingPaceSeconds, lower: 1, upper: 30)
         countdownSeconds = Int(clamp(Double(defaults.object(forKey: DefaultsKey.countdownSeconds) as? Int ?? countdownSeconds), lower: 0, upper: 10))
         if let rawValue = defaults.string(forKey: DefaultsKey.countdownBehavior),
            let savedBehavior = CountdownBehavior(rawValue: rawValue) {
@@ -326,10 +422,15 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
         defaults.set(isRunning, forKey: DefaultsKey.isRunning)
         defaults.set(isOverlayVisible, forKey: DefaultsKey.isOverlayVisible)
         defaults.set(privacyModeEnabled, forKey: DefaultsKey.privacyModeEnabled)
+        defaults.set(clickContentTogglesPlayback, forKey: DefaultsKey.clickContentTogglesPlayback)
+        defaults.set(autoPauseResumeWithLocalMic, forKey: DefaultsKey.autoPauseResumeWithLocalMic)
+        defaults.set(autoAdjustSpeedToVoicePace, forKey: DefaultsKey.autoAdjustSpeedToVoicePace)
         defaults.set(speedPointsPerSecond, forKey: DefaultsKey.speed)
         defaults.set(fontSize, forKey: DefaultsKey.fontSize)
         defaults.set(overlayWidth, forKey: DefaultsKey.overlayWidth)
         defaults.set(overlayHeight, forKey: DefaultsKey.overlayHeight)
+        defaults.set(backgroundOpacity, forKey: DefaultsKey.backgroundOpacity)
+        defaults.set(scrollingPaceSeconds, forKey: DefaultsKey.scrollingPaceSeconds)
         defaults.set(countdownSeconds, forKey: DefaultsKey.countdownSeconds)
         defaults.set(countdownBehavior.rawValue, forKey: DefaultsKey.countdownBehavior)
         defaults.set(scrollMode.rawValue, forKey: DefaultsKey.scrollMode)
@@ -368,6 +469,36 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
         hasStartedSession = true
         shouldUseCountdownOnNextStart = false
         isRunning = true
+    }
+
+    private func resumeWithoutCountdown() {
+        countdownTask?.cancel()
+        countdownTask = nil
+        isCountingDown = false
+        countdownRemaining = 0
+        hasStartedSession = true
+        shouldUseCountdownOnNextStart = false
+        manualScrollEnabled = false
+        isRunning = true
+    }
+
+    private func toggleFromMouseInteraction() {
+        if isRunning || isCountingDown {
+            pauseFromMouseInteraction()
+        } else {
+            resumeFromMouseInteraction()
+        }
+    }
+
+    private func pauseFromMouseInteraction() {
+        stop()
+        isPausedByVoiceMonitor = false
+        isVoiceResumeBlockedByMousePause = true
+    }
+
+    private func resumeFromMouseInteraction() {
+        isVoiceResumeBlockedByMousePause = false
+        start()
     }
 
     private func clampedSpeed(_ value: Double) -> Double {

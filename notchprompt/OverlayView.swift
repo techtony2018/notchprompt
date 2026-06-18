@@ -88,6 +88,8 @@ private struct AppleNotchShape: InsettableShape {
 
 struct OverlayView: View {
     @ObservedObject var model: PrompterModel
+    @State private var tooltipText: String?
+    @State private var resizeStartSize: CGSize?
 
     var body: some View {
         // Ratio-driven contour tuned to Apple notch geometry and scaled to the
@@ -146,25 +148,34 @@ struct OverlayView: View {
             .padding(.bottom, 16)
             .clipShape(Rectangle())
             .overlay {
-                TrackpadScrollCaptureView { delta in
-                    model.handleManualScroll(deltaPoints: delta)
-                }
+                TrackpadScrollCaptureView(
+                    onScroll: { delta in
+                        model.handleManualScroll(deltaPoints: delta)
+                    },
+                    onClick: { horizontalFraction, clickCount in
+                        model.handleContentClick(horizontalFraction: horizontalFraction, clickCount: clickCount)
+                    }
+                )
             }
             
             if !model.isCountingDown {
                 HStack {
                     HStack(spacing: 6) {
                         OverlayControlButton(
-                            symbol: (model.isRunning || model.isCountingDown) ? "hand.draw.fill" : "play.fill"
+                            symbol: (model.isRunning || model.isCountingDown) ? "hand.draw.fill" : "play.fill",
+                            tooltip: (model.isRunning || model.isCountingDown) ? "Pause and switch to manual trackpad scroll" : "Start auto scroll",
+                            onTooltipChange: setTooltip
                         ) {
                             model.switchPlaybackModeFromOverlayControl()
                         }
-                        .help((model.isRunning || model.isCountingDown) ? "Pause and switch to manual trackpad scroll" : "Start auto scroll")
                         
-                        OverlayControlButton(symbol: "gobackward.5") {
-                            model.jumpBack(seconds: 5)
+                        OverlayControlButton(
+                            symbol: "gobackward.5",
+                            tooltip: "Jump back \(Int(model.scrollingPaceSeconds)) seconds",
+                            onTooltipChange: setTooltip
+                        ) {
+                            model.jumpBack(seconds: model.scrollingPaceSeconds)
                         }
-                        .help("Jump back 5 seconds")
                     }
                     .padding(.horizontal, 8)
                     .padding(.vertical, 6)
@@ -177,32 +188,39 @@ struct OverlayView: View {
                     Spacer(minLength: 8)
                     
                     HStack(spacing: 6) {
-                        OverlayControlButton(symbol: "doc.on.clipboard") {
+                        OverlayControlButton(
+                            symbol: "doc.on.clipboard",
+                            tooltip: "Paste script from clipboard",
+                            onTooltipChange: setTooltip
+                        ) {
                             if let text = NSPasteboard.general.string(forType: .string) {
                                 model.pasteScript(text)
                             }
                         }
-                        .help("Paste script from clipboard")
 
-                        OverlayControlButton(symbol: "trash") {
+                        OverlayControlButton(
+                            symbol: "trash",
+                            tooltip: "Clear script",
+                            onTooltipChange: setTooltip
+                        ) {
                             model.script = ""
                         }
-                        .help("Clear script")
 
-                        OverlayControlButton(symbol: "minus", repeatWhilePressed: true) {
-                            model.adjustSpeed(delta: -PrompterModel.speedStep)
+                        OverlayControlButton(
+                            symbol: "gearshape",
+                            tooltip: "Open settings",
+                            onTooltipChange: setTooltip
+                        ) {
+                            NSApp.sendAction(NSSelectorFromString("openMainWindow"), to: nil, from: nil)
                         }
-                        .help("Decrease speed")
 
-                        OverlayControlButton(symbol: "plus", repeatWhilePressed: true) {
-                            model.adjustSpeed(delta: PrompterModel.speedStep)
-                        }
-                        .help("Increase speed")
-
-                        OverlayControlButton(symbol: "xmark") {
+                        OverlayControlButton(
+                            symbol: "xmark",
+                            tooltip: "Quit Notchprompt",
+                            onTooltipChange: setTooltip
+                        ) {
                             NSApp.terminate(nil)
                         }
-                        .help("Quit Notchprompt")
                     }
                     .padding(.horizontal, 8)
                     .padding(.vertical, 6)
@@ -217,6 +235,26 @@ struct OverlayView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             }
 
+            if let tooltipText {
+                Text(tooltipText)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                    .background(Color.black.opacity(0.92), in: RoundedRectangle(cornerRadius: 6))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6)
+                            .stroke(Color.white.opacity(0.18), lineWidth: 1)
+                    )
+                    .frame(maxWidth: max(model.overlayWidth - 72, 120))
+                    .padding(.horizontal, 36)
+                    .padding(.bottom, 10)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                    .allowsHitTesting(false)
+            }
+
             if model.isCountingDown {
                 ZStack {
                     Color.black.opacity(0.92)
@@ -227,15 +265,59 @@ struct OverlayView: View {
                 .clipShape(shape)
                 .allowsHitTesting(false)
             }
+
+            resizeHandle
         }
         .frame(width: model.overlayWidth, height: model.overlayHeight)
+    }
+
+    private func setTooltip(_ text: String?) {
+        tooltipText = text
+    }
+
+    private var resizeHandle: some View {
+        VStack {
+            Spacer(minLength: 0)
+            HStack {
+                Spacer(minLength: 0)
+                Image(systemName: "arrow.down.right.and.arrow.up.left")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.72))
+                    .padding(10)
+                    .contentShape(Rectangle())
+                    .gesture(
+                        DragGesture()
+                            .onChanged { value in
+                                let startSize = resizeStartSize ?? CGSize(
+                                    width: model.overlayWidth,
+                                    height: model.overlayHeight
+                                )
+                                resizeStartSize = startSize
+                                let targetWidth = startSize.width + value.translation.width
+                                let targetHeight = startSize.height + value.translation.height
+                                model.overlayWidth = min(max(Double(targetWidth), 400), 1200)
+                                model.overlayHeight = min(max(Double(targetHeight), 120), 300)
+                            }
+                            .onEnded { _ in
+                                resizeStartSize = nil
+                            }
+                    )
+                    .onHover { hovering in
+                        setTooltip(hovering ? "Resize prompt window" : nil)
+                    }
+            }
+        }
+        .padding(.trailing, 4)
+        .padding(.bottom, 4)
     }
 }
 
 private struct OverlayControlButton: View {
     let symbol: String
+    let tooltip: String
     var isActive: Bool = false
     var repeatWhilePressed: Bool = false
+    let onTooltipChange: (String?) -> Void
     let action: () -> Void
 
     var body: some View {
@@ -257,6 +339,9 @@ private struct OverlayControlButton: View {
                 repeatAction: action
             )
         )
+        .onHover { isHovering in
+            onTooltipChange(isHovering ? tooltip : nil)
+        }
     }
 }
 
@@ -345,38 +430,50 @@ struct VisualEffectView: NSViewRepresentable {
 
 struct TrackpadScrollCaptureView: NSViewRepresentable {
     let onScroll: (CGFloat) -> Void
+    let onClick: (CGFloat, Int) -> Void
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(onScroll: onScroll)
+        Coordinator(onScroll: onScroll, onClick: onClick)
     }
 
     func makeNSView(context: Context) -> ScrollCaptureNSView {
         let view = ScrollCaptureNSView()
         view.onScroll = context.coordinator.handleScroll
+        view.onClick = context.coordinator.handleClick
         return view
     }
 
     func updateNSView(_ nsView: ScrollCaptureNSView, context: Context) {
         nsView.onScroll = context.coordinator.handleScroll
+        nsView.onClick = context.coordinator.handleClick
     }
 
     final class Coordinator {
         let onScroll: (CGFloat) -> Void
+        let onClick: (CGFloat, Int) -> Void
 
-        init(onScroll: @escaping (CGFloat) -> Void) {
+        init(onScroll: @escaping (CGFloat) -> Void, onClick: @escaping (CGFloat, Int) -> Void) {
             self.onScroll = onScroll
+            self.onClick = onClick
         }
 
         func handleScroll(_ event: NSEvent) {
             let rawDelta = event.hasPreciseScrollingDeltas ? event.scrollingDeltaY : event.deltaY * 10
-            let semanticDelta = event.isDirectionInvertedFromDevice ? rawDelta : -rawDelta
-            onScroll(semanticDelta)
+            // Use AppKit's system-adjusted delta so manual scrolling follows
+            // the user's Natural Scrolling setting.
+            onScroll(rawDelta)
+        }
+
+        func handleClick(horizontalFraction: CGFloat, clickCount: Int) {
+            onClick(horizontalFraction, clickCount)
         }
     }
 }
 
 final class ScrollCaptureNSView: NSView {
     var onScroll: ((NSEvent) -> Void)?
+    var onClick: ((CGFloat, Int) -> Void)?
+    private var pendingSingleClick: DispatchWorkItem?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -390,6 +487,25 @@ final class ScrollCaptureNSView: NSView {
     }
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override func mouseDown(with event: NSEvent) {
+        let location = convert(event.locationInWindow, from: nil)
+        let fraction = bounds.width > 0 ? min(max(location.x / bounds.width, 0), 1) : 0.5
+        if event.clickCount >= 2 {
+            pendingSingleClick?.cancel()
+            pendingSingleClick = nil
+            onClick?(fraction, event.clickCount)
+            return
+        }
+
+        let click = DispatchWorkItem { [weak self] in
+            self?.onClick?(fraction, 1)
+            self?.pendingSingleClick = nil
+        }
+        pendingSingleClick?.cancel()
+        pendingSingleClick = click
+        DispatchQueue.main.asyncAfter(deadline: .now() + NSEvent.doubleClickInterval, execute: click)
+    }
 
     override func scrollWheel(with event: NSEvent) {
         onScroll?(event)

@@ -12,6 +12,7 @@ enum ScreenSelectionSelfTests {
         assertUserSelectionRespected()
         assertFallsBackToMenuBarWhenNoBuiltIn()
         assertFallsBackToNameHeuristic()
+        assertOverlayFrameRecentersWhenSizeChanges()
     }
 
     private static func assertBuiltInPreferredByDefault() {
@@ -48,5 +49,26 @@ enum ScreenSelectionSelfTests {
         ]
         let chosen = ScreenSelection.chooseScreenID(selectedScreenID: 0, screens: screens)
         assert(chosen == 8, "Expected built-in name heuristic fallback")
+    }
+
+    private static func assertOverlayFrameRecentersWhenSizeChanges() {
+        let screenFrame = CGRect(x: 0, y: 0, width: 1512, height: 982)
+        let narrowFrame = OverlayGeometry.centeredTopFrame(
+            screenFrame: screenFrame,
+            width: 600,
+            height: 150,
+            padding: 0
+        )
+        let wideFrame = OverlayGeometry.centeredTopFrame(
+            screenFrame: screenFrame,
+            width: 900,
+            height: 220,
+            padding: 0
+        )
+
+        assert(narrowFrame.midX == screenFrame.midX, "Expected narrow overlay to be centered")
+        assert(wideFrame.midX == screenFrame.midX, "Expected resized overlay to be re-centered")
+        assert(narrowFrame.maxY == screenFrame.maxY, "Expected narrow overlay to stay top-pinned")
+        assert(wideFrame.maxY == screenFrame.maxY, "Expected resized overlay to stay top-pinned")
     }
 }
