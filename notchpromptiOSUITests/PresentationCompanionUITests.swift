@@ -20,6 +20,7 @@ final class PresentationCompanionUITests: XCTestCase {
         XCTAssertTrue(title.waitForExistence(timeout: 8))
         let prompt = app.otherElements["promptSurface"].firstMatch
         XCTAssertTrue(prompt.waitForExistence(timeout: 8))
+        XCTAssertTrue(firstExistingButton(identifier: "pictureInPictureButton", label: "Start Picture in Picture").exists)
         addScreenshot(named: "portrait")
 
         XCUIDevice.shared.orientation = .landscapeLeft

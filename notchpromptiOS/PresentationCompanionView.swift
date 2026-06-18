@@ -8,6 +8,7 @@ import UIKit
 
 struct PresentationCompanionView: View {
     @StateObject private var voiceMonitor = IOSLocalMicrophoneVoiceMonitor()
+    @StateObject private var pictureInPictureController = IOSPictureInPicturePromptController()
     @State private var script = """
 PCompanion helps you rehearse without losing your place.
 
@@ -74,6 +75,13 @@ Thank you.
                         height: promptHeight(for: proxy.size)
                     )
                     .position(promptPosition(in: proxy))
+
+                PictureInPictureSourceView(
+                    controller: pictureInPictureController,
+                    configuration: pictureInPictureConfiguration
+                )
+                .frame(width: 2, height: 2)
+                .accessibilityHidden(true)
             }
         }
         .ignoresSafeArea(.keyboard, edges: .bottom)
@@ -174,40 +182,62 @@ Thank you.
     }
 
     private var promptToolbar: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
             Text("PCompanion")
-                .font(.headline)
+                .font(.subheadline.weight(.semibold))
                 .lineLimit(1)
+                .minimumScaleFactor(0.72)
                 .foregroundStyle(.white)
+                .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
                 .accessibilityIdentifier("presentationTitle")
-
-            Spacer(minLength: 8)
+                .layoutPriority(0)
 
             Button {
                 togglePlayback()
             } label: {
                 Image(systemName: isRunning ? "pause.fill" : "play.fill")
                     .font(.headline)
-                    .frame(width: 36, height: 36)
+                    .frame(width: 34, height: 34)
             }
             .buttonStyle(.plain)
             .foregroundStyle(.white)
             .background(.white.opacity(0.16), in: Circle())
             .accessibilityLabel(isRunning ? "Pause" : "Play")
             .accessibilityIdentifier("playPauseButton")
+            .layoutPriority(1)
+
+            Button {
+                guard pictureInPictureController.isSupported else {
+                    pictureInPictureController.showUnsupportedMessage()
+                    return
+                }
+                pictureInPictureController.toggle()
+            } label: {
+                Image(systemName: pictureInPictureController.isActive ? "pip.exit" : "pip.enter")
+                    .font(.headline)
+                    .frame(width: 34, height: 34)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.white)
+            .background(.white.opacity(0.16), in: Circle())
+            .opacity(pictureInPictureController.isSupported ? 1 : 0.48)
+            .accessibilityLabel(pictureInPictureController.isActive ? "Stop Picture in Picture" : "Start Picture in Picture")
+            .accessibilityIdentifier("pictureInPictureButton")
+            .layoutPriority(1)
 
             Button {
                 isSettingsPresented = true
             } label: {
                 Image(systemName: "gearshape.fill")
                     .font(.headline)
-                    .frame(width: 36, height: 36)
+                    .frame(width: 34, height: 34)
             }
             .buttonStyle(.plain)
             .foregroundStyle(.white)
             .background(.white.opacity(0.16), in: Circle())
             .accessibilityLabel("Settings")
             .accessibilityIdentifier("settingsButton")
+            .layoutPriority(1)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
@@ -276,6 +306,30 @@ Thank you.
 
                     if let wordsPerMinute = voiceMonitor.detectedWordsPerMinute {
                         Text("Detected pace: \(Int(wordsPerMinute.rounded())) wpm")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                Section("Picture in Picture") {
+                    Button {
+                        pictureInPictureController.toggle()
+                    } label: {
+                        Label(
+                            pictureInPictureController.isActive ? "Stop Picture in Picture" : "Start Picture in Picture",
+                            systemImage: pictureInPictureController.isActive ? "pip.exit" : "pip.enter"
+                        )
+                    }
+                    .disabled(!pictureInPictureController.isSupported)
+
+                    if !pictureInPictureController.isSupported {
+                        Text("Picture in Picture is not available on this device.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    if let message = pictureInPictureController.statusMessage {
+                        Text(message)
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
@@ -510,6 +564,16 @@ Thank you.
 
     private func clamp(_ value: CGFloat, min minimum: CGFloat, max maximum: CGFloat) -> CGFloat {
         Swift.min(Swift.max(value, minimum), maximum)
+    }
+
+    private var pictureInPictureConfiguration: PictureInPicturePromptConfiguration {
+        PictureInPicturePromptConfiguration(
+            script: script,
+            fontSize: fontSize,
+            opacity: opacity,
+            scrollOffset: scrollOffset,
+            isRunning: isRunning
+        )
     }
 }
 
