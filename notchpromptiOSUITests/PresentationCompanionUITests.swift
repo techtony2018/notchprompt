@@ -16,7 +16,7 @@ final class PresentationCompanionUITests: XCTestCase {
         XCUIDevice.shared.orientation = .portrait
         app.launch()
 
-        let title = app.staticTexts["Presentation Companion"].firstMatch
+        let title = app.staticTexts["PCompanion"].firstMatch
         XCTAssertTrue(title.waitForExistence(timeout: 8))
         let prompt = app.otherElements["promptSurface"].firstMatch
         XCTAssertTrue(prompt.waitForExistence(timeout: 8))

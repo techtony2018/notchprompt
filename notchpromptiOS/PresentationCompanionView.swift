@@ -9,7 +9,7 @@ import UIKit
 struct PresentationCompanionView: View {
     @StateObject private var voiceMonitor = IOSLocalMicrophoneVoiceMonitor()
     @State private var script = """
-Presentation Companion helps you rehearse without losing your place.
+PCompanion helps you rehearse without losing your place.
 
 Tap the center of the prompt to start, pause, or resume.
 Tap the left third to move back.
@@ -175,7 +175,7 @@ Thank you.
 
     private var promptToolbar: some View {
         HStack(spacing: 10) {
-            Text("Presentation Companion")
+            Text("PCompanion")
                 .font(.headline)
                 .lineLimit(1)
                 .foregroundStyle(.white)
@@ -281,7 +281,7 @@ Thank you.
                     }
                 }
             }
-            .navigationTitle("Presentation Companion")
+            .navigationTitle("PCompanion")
             .navigationBarTitleDisplayMode(.inline)
             .scrollDismissesKeyboard(.interactively)
             .background(
