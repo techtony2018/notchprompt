@@ -187,7 +187,7 @@ struct ContentView: View {
                 sliderRow(
                     title: "Opacity",
                     valueText: "\(Int((model.backgroundOpacity * 100).rounded()))%",
-                    slider: Slider(value: $model.backgroundOpacity, in: 0.35...1.0, step: 0.05)
+                    slider: Slider(value: $model.backgroundOpacity, in: 0.08...0.92, step: 0.04)
                 )
             }
         }

@@ -1,7 +1,7 @@
-# Presentation Companion
+# PCompanion
 
 <p align="center">
-  <img src="assets/banner.png" alt="Presentation Companion Banner" width="100%">
+  <img src="assets/banner.png" alt="PCompanion Banner" width="100%">
 </p>
 
 Native teleprompter companion for presentations and recordings. The macOS app
@@ -14,7 +14,7 @@ surface for iPhone and iPad.
 > launch.
 
 <!--
-![Presentation Companion hero screenshot](docs/media/hero.png)
+![PCompanion hero screenshot](docs/media/hero.png)
 *Hero view of the overlay panel and settings workflow.*
 
 ![Presentation Companion scrolling demo GIF](docs/media/notchprompt-demo.gif)
@@ -23,7 +23,7 @@ surface for iPhone and iPad.
 
 ## Features
 
-- Menu bar utility workflow (`NP` status item).
+- Menu bar utility workflow (`PC` status item).
 - Notch-adjacent floating overlay with transport controls.
 - Start/pause, reset, and configurable jump controls.
 - Click the left third of the script area to scroll back; double-click to scroll back twice the configured pace.
@@ -34,7 +34,7 @@ surface for iPhone and iPad.
 - Optional countdown before scrolling starts.
 - Edit scripts directly in Settings with a scrollable, resizable text area.
 - Import/export plain text scripts.
-- Optional local-microphone controls for auto pause/resume and automatic speed adjustment based on speaking pace.
+- Optional local-microphone controls for auto pause/resume and automatic speed adjustment based on speaking pace on macOS and iOS.
 - Voice-triggered resume is blocked after a mouse pause until you click to resume, so Q&A audio does not restart the script.
 - Privacy mode (`NSWindow.SharingType`, best-effort/app-dependent).
 
@@ -50,8 +50,8 @@ surface for iPhone and iPad.
 1. Open GitHub Releases:
    `https://github.com/techtony2018/notchprompt/releases`
 2. Download the latest `.dmg` release asset.
-3. Open the DMG and drag `Presentation Companion.app` to `Applications`.
-4. Launch `Presentation Companion.app`.
+3. Open the DMG and drag `PCompanion.app` to `Applications`.
+4. Launch `PCompanion.app`.
 
 ### Unsigned Build Note
 
@@ -59,20 +59,20 @@ This build is currently unsigned/unnotarized, so macOS may show security prompts
 
 If macOS shows:
 
-- `Apple could not verify "Presentation Companion" is free of malware...`
-- or `"Presentation Companion" is damaged and can’t be opened`
+- `Apple could not verify "PCompanion" is free of malware...`
+- or `"PCompanion" is damaged and can’t be opened`
 
 run:
 
 ```bash
-xattr -cr "/Applications/Presentation Companion.app"
-open "/Applications/Presentation Companion.app"
+xattr -cr "/Applications/PCompanion.app"
+open "/Applications/PCompanion.app"
 ```
 
 If it is still blocked:
 
 1. Open `System Settings -> Privacy & Security`.
-2. Click **Open Anyway** for `Presentation Companion`.
+2. Click **Open Anyway** for `PCompanion`.
 3. Launch again.
 
 ## Keyboard Shortcuts

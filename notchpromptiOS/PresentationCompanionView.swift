@@ -7,6 +7,7 @@ import SwiftUI
 import UIKit
 
 struct PresentationCompanionView: View {
+    @StateObject private var voiceMonitor = IOSLocalMicrophoneVoiceMonitor()
     @State private var script = """
 Presentation Companion helps you rehearse without losing your place.
 
@@ -53,6 +54,10 @@ Thank you.
     @State private var promptWidthFraction: CGFloat = 0.92
     @State private var promptHeightFraction: CGFloat = 0.72
     @State private var resizeStartFractions: CGSize?
+    @State private var autoPauseResumeWithLocalMic = false
+    @State private var autoAdjustSpeedToVoicePace = false
+    @State private var isPausedByVoiceMonitor = false
+    @State private var isVoiceResumeBlockedByManualPause = false
     @FocusState private var isScriptFocused: Bool
 
     private let timer = Timer.publish(every: 1.0 / 60.0, on: .main, in: .common).autoconnect()
@@ -68,7 +73,7 @@ Thank you.
                         width: promptWidth(for: proxy.size),
                         height: promptHeight(for: proxy.size)
                     )
-                    .position(x: proxy.size.width / 2, y: proxy.size.height / 2)
+                    .position(promptPosition(for: proxy.size))
             }
         }
         .ignoresSafeArea(.keyboard, edges: .bottom)
@@ -80,6 +85,21 @@ Thank you.
         }
         .onChange(of: script) { _, _ in
             resetScroll()
+        }
+        .onChange(of: autoPauseResumeWithLocalMic) { _, _ in
+            updateVoiceMonitor()
+        }
+        .onChange(of: autoAdjustSpeedToVoicePace) { _, _ in
+            updateVoiceMonitor()
+        }
+        .onChange(of: voiceMonitor.isVoiceActive) { _, isVoiceActive in
+            handleVoiceActivityChanged(isVoiceActive)
+        }
+        .onChange(of: voiceMonitor.detectedWordsPerMinute) { _, wordsPerMinute in
+            updateSpeakingPace(wordsPerMinute)
+        }
+        .onDisappear {
+            voiceMonitor.stop()
         }
     }
 
@@ -237,6 +257,23 @@ Thank you.
                     }
                     sliderRow("Fast forward/backward scrolling pace", value: $paceSeconds, range: 1...30, step: 1, suffix: "s")
                 }
+
+                Section("Voice") {
+                    Toggle("Auto pause/resume from local mic", isOn: $autoPauseResumeWithLocalMic)
+                    Toggle("Auto adjust speed to speaking pace", isOn: $autoAdjustSpeedToVoicePace)
+
+                    if let message = voiceMonitor.unavailableMessage {
+                        Text(message)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    if let wordsPerMinute = voiceMonitor.detectedWordsPerMinute {
+                        Text("Detected pace: \(Int(wordsPerMinute.rounded())) wpm")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
             }
             .navigationTitle("Presentation Companion")
             .navigationBarTitleDisplayMode(.inline)
@@ -309,8 +346,17 @@ Thank you.
     private func togglePlayback() {
         isScriptFocused = false
         isSettingsPresented = false
-        isRunning.toggle()
+
         if isRunning {
+            isRunning = false
+            isPausedByVoiceMonitor = false
+            if autoPauseResumeWithLocalMic {
+                isVoiceResumeBlockedByManualPause = true
+            }
+        } else {
+            isRunning = true
+            isVoiceResumeBlockedByManualPause = false
+            isPausedByVoiceMonitor = false
             lastTickDate = nil
         }
     }
@@ -335,6 +381,8 @@ Thank you.
         isRunning = false
         scrollOffset = 0
         lastTickDate = nil
+        isPausedByVoiceMonitor = false
+        isVoiceResumeBlockedByManualPause = false
     }
 
     private func clampScroll() {
@@ -342,7 +390,46 @@ Thank you.
         scrollOffset = min(max(scrollOffset, 0), maxOffset)
         if scrollOffset >= maxOffset, maxOffset > 0 {
             isRunning = false
+            isPausedByVoiceMonitor = false
         }
+    }
+
+    private func updateVoiceMonitor() {
+        guard autoPauseResumeWithLocalMic || autoAdjustSpeedToVoicePace else {
+            voiceMonitor.stop()
+            isPausedByVoiceMonitor = false
+            isVoiceResumeBlockedByManualPause = false
+            return
+        }
+
+        voiceMonitor.start()
+    }
+
+    private func handleVoiceActivityChanged(_ isVoiceActive: Bool) {
+        guard autoPauseResumeWithLocalMic else { return }
+
+        if isVoiceActive {
+            guard isPausedByVoiceMonitor,
+                  !isVoiceResumeBlockedByManualPause,
+                  !isRunning else { return }
+            isPausedByVoiceMonitor = false
+            isRunning = true
+            lastTickDate = nil
+            return
+        }
+
+        guard isRunning else { return }
+        isRunning = false
+        isPausedByVoiceMonitor = true
+        lastTickDate = nil
+    }
+
+    private func updateSpeakingPace(_ wordsPerMinute: Double?) {
+        guard autoAdjustSpeedToVoicePace,
+              let wordsPerMinute else { return }
+        let target = 70 * (wordsPerMinute / 160)
+        let smoothed = (speed * 0.82) + (target * 0.18)
+        speed = min(max(smoothed, 20), 180)
     }
 
     private func promptWidth(for availableSize: CGSize) -> CGFloat {
@@ -353,6 +440,25 @@ Thank you.
     private func promptHeight(for availableSize: CGSize) -> CGFloat {
         let minimum = min(availableSize.height * 0.48, 260)
         return max(availableSize.height * promptHeightFraction, minimum)
+    }
+
+    private func promptPosition(for availableSize: CGSize) -> CGPoint {
+        let width = promptWidth(for: availableSize)
+        let height = promptHeight(for: availableSize)
+        let edgePadding: CGFloat = 10
+        let isLandscape = availableSize.width > availableSize.height
+
+        if isLandscape {
+            return CGPoint(
+                x: availableSize.width - (width / 2) - edgePadding,
+                y: availableSize.height / 2
+            )
+        }
+
+        return CGPoint(
+            x: availableSize.width / 2,
+            y: (height / 2) + edgePadding
+        )
     }
 
     private func resizeHandle(in availableSize: CGSize) -> some View {

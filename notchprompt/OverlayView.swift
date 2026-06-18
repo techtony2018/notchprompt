@@ -216,7 +216,7 @@ struct OverlayView: View {
 
                         OverlayControlButton(
                             symbol: "xmark",
-                            tooltip: "Quit Notchprompt",
+                            tooltip: "Quit PCompanion",
                             onTooltipChange: setTooltip
                         ) {
                             NSApp.terminate(nil)

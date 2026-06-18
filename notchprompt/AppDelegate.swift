@@ -46,6 +46,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
         setupEditMenu()
         wireModel()
+        setVoiceMonitorEnabled(model.autoPauseResumeWithLocalMic || model.autoAdjustSpeedToVoicePace)
         hotkeyManager.registerAll()
         setupStatusBar()
         installEditKeyHandler()
@@ -189,8 +190,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     private func setupStatusBar() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        item.button?.title = "NP"
-        item.button?.toolTip = "Notchprompt"
+        item.button?.title = "PC"
+        item.button?.toolTip = "PCompanion"
 
         let menu = NSMenu()
 
@@ -278,7 +279,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
         menu.addItem(.separator())
 
-        let quit = NSMenuItem(title: "Quit Notchprompt", action: #selector(quitApp), keyEquivalent: "q")
+        let quit = NSMenuItem(title: "Quit PCompanion", action: #selector(quitApp), keyEquivalent: "q")
         quit.target = self
         quit.keyEquivalentModifierMask = [.command]
         menu.addItem(quit)

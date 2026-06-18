@@ -95,8 +95,7 @@ final class OverlayWindowController: NSObject {
             defer: false
         )
         panel.isReleasedWhenClosed = false
-        // Use .screenSaver level to ensure it sits above the menu bar and covers the notch area.
-        panel.level = .screenSaver
+        panel.level = .floating
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
         panel.hidesOnDeactivate = false
         // panel.isFloatingPanel = true // This overrides level to .floating (3)
@@ -128,12 +127,10 @@ final class OverlayWindowController: NSObject {
         debugDump(reason: "setVisible-before isVisible=\(isVisible)", intendedScreen: targetScreen(), calc: nil)
 #endif
         if isVisible {
-            // Ensure the panel can reappear even when the app is backgrounded.
             reposition()
-            panel.level = .screenSaver
+            panel.level = .floating
             panel.alphaValue = 1.0
             panel.orderFrontRegardless()
-            panel.makeKeyAndOrderFront(nil)
         } else {
             panel.orderOut(nil)
         }
@@ -149,8 +146,6 @@ final class OverlayWindowController: NSObject {
         let width = CGFloat(model.overlayWidth)
         let desiredHeight = CGFloat(model.overlayHeight)
 
-        // Always pin to the very top of the physical screen so we cover the notch/menu bar
-        // even when macOS auto-hides the menu bar (reservedTop may report as 0).
         let height = desiredHeight
         let topRefY = screen.frame.maxY
         let targetFrame = OverlayGeometry.centeredTopFrame(
@@ -184,8 +179,7 @@ final class OverlayWindowController: NSObject {
         isApplyingFrame = false
         lastFrame = targetFrame
         
-        // Ensure level is re-applied in case something reset it
-        panel.level = .screenSaver
+        panel.level = .floating
         panel.alphaValue = 1.0
 
 #if DEBUG

@@ -18,12 +18,15 @@ final class PresentationCompanionUITests: XCTestCase {
 
         let title = app.staticTexts["Presentation Companion"].firstMatch
         XCTAssertTrue(title.waitForExistence(timeout: 8))
+        let prompt = app.otherElements["promptSurface"].firstMatch
+        XCTAssertTrue(prompt.waitForExistence(timeout: 8))
         addScreenshot(named: "portrait")
 
         XCUIDevice.shared.orientation = .landscapeLeft
         sleep(2)
 
         XCTAssertTrue(title.exists)
+        XCTAssertTrue(prompt.exists)
         addScreenshot(named: "landscape-left")
     }
 

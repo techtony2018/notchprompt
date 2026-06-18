@@ -62,7 +62,7 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
     @Published var fontSize: Double = 20
     @Published var overlayWidth: Double = 600
     @Published var overlayHeight: Double = 150
-    @Published var backgroundOpacity: Double = 1.0
+    @Published var backgroundOpacity: Double = 0.58
     @Published var scrollingPaceSeconds: Double = 5
     @Published var scrollMode: ScrollMode = .infinite
     /// 0 means "auto" (prefer built-in display)
@@ -104,6 +104,7 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
         static let overlayWidth = "overlayWidth"
         static let overlayHeight = "overlayHeight"
         static let backgroundOpacity = "backgroundOpacity"
+        static let translucentBackgroundDefaultMigration = "translucentBackgroundDefaultMigration"
         static let scrollingPaceSeconds = "scrollingPaceSeconds"
         static let countdownSeconds = "countdownSeconds"
         static let countdownBehavior = "countdownBehavior"
@@ -397,7 +398,14 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
         fontSize = clamp(defaults.object(forKey: DefaultsKey.fontSize) as? Double ?? fontSize, lower: 12, upper: 40)
         overlayWidth = clamp(defaults.object(forKey: DefaultsKey.overlayWidth) as? Double ?? overlayWidth, lower: 400, upper: 1200)
         overlayHeight = clamp(defaults.object(forKey: DefaultsKey.overlayHeight) as? Double ?? overlayHeight, lower: 120, upper: 300)
-        backgroundOpacity = clamp(defaults.object(forKey: DefaultsKey.backgroundOpacity) as? Double ?? backgroundOpacity, lower: 0.35, upper: 1.0)
+        let savedBackgroundOpacity = defaults.object(forKey: DefaultsKey.backgroundOpacity) as? Double
+        if defaults.object(forKey: DefaultsKey.translucentBackgroundDefaultMigration) == nil,
+           savedBackgroundOpacity == nil || (savedBackgroundOpacity ?? 0) >= 0.95 {
+            backgroundOpacity = 0.58
+            defaults.set(true, forKey: DefaultsKey.translucentBackgroundDefaultMigration)
+        } else {
+            backgroundOpacity = clamp(savedBackgroundOpacity ?? backgroundOpacity, lower: 0.08, upper: 0.92)
+        }
         scrollingPaceSeconds = clamp(defaults.object(forKey: DefaultsKey.scrollingPaceSeconds) as? Double ?? scrollingPaceSeconds, lower: 1, upper: 30)
         countdownSeconds = Int(clamp(Double(defaults.object(forKey: DefaultsKey.countdownSeconds) as? Int ?? countdownSeconds), lower: 0, upper: 10))
         if let rawValue = defaults.string(forKey: DefaultsKey.countdownBehavior),
