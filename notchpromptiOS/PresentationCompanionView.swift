@@ -73,7 +73,7 @@ Thank you.
                         width: promptWidth(for: proxy.size),
                         height: promptHeight(for: proxy.size)
                     )
-                    .position(promptPosition(for: proxy.size))
+                    .position(promptPosition(in: proxy))
             }
         }
         .ignoresSafeArea(.keyboard, edges: .bottom)
@@ -262,6 +262,12 @@ Thank you.
                     Toggle("Auto pause/resume from local mic", isOn: $autoPauseResumeWithLocalMic)
                     Toggle("Auto adjust speed to speaking pace", isOn: $autoAdjustSpeedToVoicePace)
 
+                    if voiceMonitor.isMonitoring {
+                        Text("Mic: \(voiceMonitor.isVoiceActive ? "voice detected" : "listening") · \(Int(voiceMonitor.inputLevelDb.rounded())) dB")
+                            .font(.footnote)
+                            .foregroundStyle(voiceMonitor.isVoiceActive ? .green : .secondary)
+                    }
+
                     if let message = voiceMonitor.unavailableMessage {
                         Text(message)
                             .font(.footnote)
@@ -442,15 +448,20 @@ Thank you.
         return max(availableSize.height * promptHeightFraction, minimum)
     }
 
-    private func promptPosition(for availableSize: CGSize) -> CGPoint {
+    private func promptPosition(in proxy: GeometryProxy) -> CGPoint {
+        let availableSize = proxy.size
         let width = promptWidth(for: availableSize)
         let height = promptHeight(for: availableSize)
         let edgePadding: CGFloat = 10
         let isLandscape = availableSize.width > availableSize.height
 
         if isLandscape {
+            let safeInsets = proxy.safeAreaInsets
+            let shouldPinLeft = safeInsets.leading > safeInsets.trailing
             return CGPoint(
-                x: availableSize.width - (width / 2) - edgePadding,
+                x: shouldPinLeft
+                    ? (width / 2) + edgePadding
+                    : availableSize.width - (width / 2) - edgePadding,
                 y: availableSize.height / 2
             )
         }

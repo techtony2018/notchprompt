@@ -28,6 +28,13 @@ final class PresentationCompanionUITests: XCTestCase {
         XCTAssertTrue(title.exists)
         XCTAssertTrue(prompt.exists)
         addScreenshot(named: "landscape-left")
+
+        XCUIDevice.shared.orientation = .landscapeRight
+        sleep(2)
+
+        XCTAssertTrue(title.exists)
+        XCTAssertTrue(prompt.exists)
+        addScreenshot(named: "landscape-right")
     }
 
     func testSettingsCanHideAndAutoScrollCanRun() throws {

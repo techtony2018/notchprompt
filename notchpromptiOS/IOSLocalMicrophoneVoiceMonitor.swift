@@ -9,14 +9,16 @@ import Foundation
 final class IOSLocalMicrophoneVoiceMonitor: ObservableObject {
     @Published private(set) var isVoiceActive = false
     @Published private(set) var detectedWordsPerMinute: Double?
+    @Published private(set) var inputLevelDb: Float = -160
+    @Published private(set) var isMonitoring = false
     @Published private(set) var unavailableMessage: String?
 
     private let engine = AVAudioEngine()
-    private var isMonitoring = false
     private var currentVoiceActive = false
     private var voiceStartDate: Date?
     private var lastVoiceDate = Date.distantPast
     private var lastPeakDate = Date.distantPast
+    private var lastMeterDate = Date.distantPast
     private var recentPeakDates: [Date] = []
     private var wasAbovePeakThreshold = false
 
@@ -58,9 +60,12 @@ final class IOSLocalMicrophoneVoiceMonitor: ObservableObject {
         isMonitoring = false
         setVoiceActive(false)
         detectedWordsPerMinute = nil
+        inputLevelDb = -160
+        currentVoiceActive = false
         voiceStartDate = nil
         lastVoiceDate = .distantPast
         lastPeakDate = .distantPast
+        lastMeterDate = .distantPast
         recentPeakDates.removeAll()
         wasAbovePeakThreshold = false
     }
@@ -103,6 +108,7 @@ final class IOSLocalMicrophoneVoiceMonitor: ObservableObject {
     private func process(_ buffer: AVAudioPCMBuffer) {
         let db = rmsDb(buffer)
         let now = Date()
+        updateInputLevel(db, at: now)
 
         if db >= activationThresholdDb {
             if voiceStartDate == nil {
@@ -111,7 +117,7 @@ final class IOSLocalMicrophoneVoiceMonitor: ObservableObject {
             lastVoiceDate = now
             trackSpeakingPeak(db: db, at: now)
 
-            if !isVoiceActive,
+            if !currentVoiceActive,
                let voiceStartDate,
                now.timeIntervalSince(voiceStartDate) >= activationDuration {
                 setVoiceActive(true)
@@ -121,7 +127,7 @@ final class IOSLocalMicrophoneVoiceMonitor: ObservableObject {
 
         voiceStartDate = nil
         wasAbovePeakThreshold = false
-        if isVoiceActive, now.timeIntervalSince(lastVoiceDate) >= releaseDuration {
+        if currentVoiceActive, now.timeIntervalSince(lastVoiceDate) >= releaseDuration {
             setVoiceActive(false)
         }
     }
@@ -178,6 +184,14 @@ final class IOSLocalMicrophoneVoiceMonitor: ObservableObject {
         currentVoiceActive = active
         Task { @MainActor in
             self.isVoiceActive = active
+        }
+    }
+
+    private func updateInputLevel(_ db: Float, at now: Date) {
+        guard now.timeIntervalSince(lastMeterDate) >= 0.2 else { return }
+        lastMeterDate = now
+        Task { @MainActor in
+            self.inputLevelDb = db
         }
     }
 }
