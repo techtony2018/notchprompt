@@ -8,10 +8,37 @@ import UIKit
 
 struct PresentationCompanionView: View {
     @State private var script = """
-Paste your script here.
+Presentation Companion helps you rehearse without losing your place.
 
-Tap the center of the prompt to start or pause.
-Tap the left third to move back, and the right third to move forward.
+Tap the center of the prompt to start, pause, or resume.
+Tap the left third to move back.
+Tap the right third to move forward.
+Open settings from the gear button when you want to edit this script.
+
+This sample text is intentionally long enough to scroll on a phone.
+Replace it with your own presentation notes when you are ready.
+
+Opening:
+Good morning, everyone.
+Today I want to walk through the problem, the approach, and the next step.
+
+Problem:
+The audience needs a clear path through the talk.
+The speaker needs a lightweight cue without fighting the screen.
+
+Approach:
+Keep the prompt readable.
+Keep the controls close.
+Make editing available without taking over the live prompt.
+
+Demo:
+Start the prompt.
+Pause when questions come in.
+Resume when the presentation continues.
+
+Close:
+The goal is simple: fewer distractions, better flow, and a calmer delivery.
+Thank you.
 """
     @State private var isRunning = false
     @State private var speed: Double = 70
@@ -22,39 +49,56 @@ Tap the left third to move back, and the right third to move forward.
     @State private var viewportHeight: CGFloat = 1
     @State private var contentHeight: CGFloat = 1
     @State private var lastTickDate: Date?
+    @State private var isSettingsPresented = false
+    @State private var promptWidthFraction: CGFloat = 0.92
+    @State private var promptHeightFraction: CGFloat = 0.72
+    @State private var resizeStartFractions: CGSize?
+    @FocusState private var isScriptFocused: Bool
 
     private let timer = Timer.publish(every: 1.0 / 60.0, on: .main, in: .common).autoconnect()
 
     var body: some View {
         GeometryReader { proxy in
-            let isLandscape = proxy.size.width > proxy.size.height
+            ZStack {
+                Color(.systemBackground)
+                    .ignoresSafeArea()
 
-            Group {
-                if isLandscape {
-                    HStack(spacing: 0) {
-                        promptSurface
-                            .frame(width: proxy.size.width * 0.64)
-                        Divider()
-                        controls
-                    }
-                } else {
-                    VStack(spacing: 0) {
-                        promptSurface
-                        Divider()
-                        controls
-                            .frame(maxHeight: min(proxy.size.height * 0.44, 390))
-                    }
-                }
+                promptWindow(in: proxy.size)
+                    .frame(
+                        width: promptWidth(for: proxy.size),
+                        height: promptHeight(for: proxy.size)
+                    )
+                    .position(x: proxy.size.width / 2, y: proxy.size.height / 2)
             }
-            .background(Color(.systemBackground))
         }
         .ignoresSafeArea(.keyboard, edges: .bottom)
+        .sheet(isPresented: $isSettingsPresented) {
+            controls
+        }
         .onReceive(timer) { date in
             tick(at: date)
         }
         .onChange(of: script) { _, _ in
             resetScroll()
         }
+    }
+
+    private func promptWindow(in availableSize: CGSize) -> some View {
+        promptSurface
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(.white.opacity(0.16), lineWidth: 1)
+            }
+            .shadow(color: .black.opacity(0.26), radius: 18, y: 10)
+            .overlay(alignment: .top) {
+                promptToolbar
+            }
+            .overlay(alignment: .bottomTrailing) {
+                resizeHandle(in: availableSize)
+            }
+            .accessibilityIdentifier("promptSurface")
+            .accessibilityValue("\(Int(scrollOffset.rounded()))")
     }
 
     private var promptSurface: some View {
@@ -67,7 +111,9 @@ Tap the left third to move back, and the right third to move forward.
                     .foregroundStyle(.white)
                     .lineSpacing(fontSize * 0.35)
                     .padding(.horizontal, 24)
-                    .padding(.vertical, 28)
+                    .padding(.top, 72)
+                    .padding(.bottom, 28)
+                    .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .topLeading)
                     .background(
                         GeometryReader { contentProxy in
@@ -85,8 +131,14 @@ Tap the left third to move back, and the right third to move forward.
                     )
                     .offset(y: -scrollOffset)
 
-                TapZoneView { zone, tapCount in
-                    handleTap(zone: zone, tapCount: tapCount)
+                VStack(spacing: 0) {
+                    Color.clear
+                        .frame(height: 60)
+
+                    TapZoneView { zone, tapCount in
+                        handleTap(zone: zone, tapCount: tapCount)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
             .clipped()
@@ -101,13 +153,63 @@ Tap the left third to move back, and the right third to move forward.
         }
     }
 
+    private var promptToolbar: some View {
+        HStack(spacing: 10) {
+            Text("Presentation Companion")
+                .font(.headline)
+                .lineLimit(1)
+                .foregroundStyle(.white)
+                .accessibilityIdentifier("presentationTitle")
+
+            Spacer(minLength: 8)
+
+            Button {
+                togglePlayback()
+            } label: {
+                Image(systemName: isRunning ? "pause.fill" : "play.fill")
+                    .font(.headline)
+                    .frame(width: 36, height: 36)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.white)
+            .background(.white.opacity(0.16), in: Circle())
+            .accessibilityLabel(isRunning ? "Pause" : "Play")
+            .accessibilityIdentifier("playPauseButton")
+
+            Button {
+                isSettingsPresented = true
+            } label: {
+                Image(systemName: "gearshape.fill")
+                    .font(.headline)
+                    .frame(width: 36, height: 36)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.white)
+            .background(.white.opacity(0.16), in: Circle())
+            .accessibilityLabel("Settings")
+            .accessibilityIdentifier("settingsButton")
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(
+            LinearGradient(
+                colors: [.black.opacity(0.74), .black.opacity(0.0)],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+        )
+    }
+
     private var controls: some View {
         NavigationStack {
             Form {
                 Section("Script") {
                     TextEditor(text: $script)
                         .font(.system(.body, design: .monospaced))
-                        .frame(minHeight: 130)
+                        .focused($isScriptFocused)
+                        .frame(minHeight: 170)
+                        .scrollContentBackground(.hidden)
+                        .accessibilityIdentifier("scriptEditor")
                 }
 
                 Section("Playback") {
@@ -138,7 +240,30 @@ Tap the left third to move back, and the right third to move forward.
             }
             .navigationTitle("Presentation Companion")
             .navigationBarTitleDisplayMode(.inline)
+            .scrollDismissesKeyboard(.interactively)
+            .background(
+                KeyboardDismissOnOutsideInput {
+                    isScriptFocused = false
+                }
+            )
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Close") {
+                        isScriptFocused = false
+                        isSettingsPresented = false
+                    }
+                }
+
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Done") {
+                        isScriptFocused = false
+                    }
+                }
+            }
         }
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
     }
 
     private func sliderRow(
@@ -182,6 +307,8 @@ Tap the left third to move back, and the right third to move forward.
     }
 
     private func togglePlayback() {
+        isScriptFocused = false
+        isSettingsPresented = false
         isRunning.toggle()
         if isRunning {
             lastTickDate = nil
@@ -217,6 +344,127 @@ Tap the left third to move back, and the right third to move forward.
             isRunning = false
         }
     }
+
+    private func promptWidth(for availableSize: CGSize) -> CGFloat {
+        let minimum = min(availableSize.width * 0.62, 280)
+        return max(availableSize.width * promptWidthFraction, minimum)
+    }
+
+    private func promptHeight(for availableSize: CGSize) -> CGFloat {
+        let minimum = min(availableSize.height * 0.48, 260)
+        return max(availableSize.height * promptHeightFraction, minimum)
+    }
+
+    private func resizeHandle(in availableSize: CGSize) -> some View {
+        Image(systemName: "arrow.down.right.and.arrow.up.left")
+            .font(.system(size: 15, weight: .semibold))
+            .foregroundStyle(.white)
+            .frame(width: 44, height: 44)
+            .background(.black.opacity(0.48), in: Circle())
+            .padding(10)
+            .accessibilityLabel("Resize prompt window")
+            .accessibilityIdentifier("resizeHandle")
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        let start = resizeStartFractions ?? CGSize(
+                            width: promptWidthFraction,
+                            height: promptHeightFraction
+                        )
+                        resizeStartFractions = start
+
+                        promptWidthFraction = clamp(
+                            start.width + value.translation.width / max(availableSize.width, 1),
+                            min: 0.48,
+                            max: 0.98
+                        )
+                        promptHeightFraction = clamp(
+                            start.height + value.translation.height / max(availableSize.height, 1),
+                            min: 0.36,
+                            max: 0.94
+                        )
+                    }
+                    .onEnded { _ in
+                        resizeStartFractions = nil
+                        clampScroll()
+                    }
+            )
+    }
+
+    private func clamp(_ value: CGFloat, min minimum: CGFloat, max maximum: CGFloat) -> CGFloat {
+        Swift.min(Swift.max(value, minimum), maximum)
+    }
+}
+
+private struct KeyboardDismissOnOutsideInput: UIViewRepresentable {
+    let dismiss: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(dismiss: dismiss)
+    }
+
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView()
+        view.isUserInteractionEnabled = false
+        return view
+    }
+
+    func updateUIView(_ uiView: UIView, context: Context) {
+        context.coordinator.dismiss = dismiss
+        DispatchQueue.main.async {
+            context.coordinator.installIfNeeded(from: uiView)
+        }
+    }
+
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        var dismiss: () -> Void
+        private weak var installedWindow: UIWindow?
+        private weak var recognizer: UITapGestureRecognizer?
+
+        init(dismiss: @escaping () -> Void) {
+            self.dismiss = dismiss
+        }
+
+        deinit {
+            if let recognizer, let installedWindow {
+                installedWindow.removeGestureRecognizer(recognizer)
+            }
+        }
+
+        func installIfNeeded(from view: UIView) {
+            guard let window = view.window, installedWindow !== window else { return }
+
+            if let recognizer, let installedWindow {
+                installedWindow.removeGestureRecognizer(recognizer)
+            }
+
+            let recognizer = UITapGestureRecognizer(target: self, action: #selector(handleTap(_:)))
+            recognizer.cancelsTouchesInView = false
+            recognizer.delegate = self
+            window.addGestureRecognizer(recognizer)
+            installedWindow = window
+            self.recognizer = recognizer
+        }
+
+        @objc private func handleTap(_ recognizer: UITapGestureRecognizer) {
+            dismiss()
+        }
+
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+            var view = touch.view
+            while let current = view {
+                if current is UITextView {
+                    return false
+                }
+                view = current.superview
+            }
+            return true
+        }
+
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+            true
+        }
+    }
 }
 
 private enum TapZone {
@@ -235,6 +483,8 @@ private struct TapZoneView: UIViewRepresentable {
     func makeUIView(context: Context) -> UIView {
         let view = UIView()
         view.backgroundColor = .clear
+        view.isAccessibilityElement = false
+        view.accessibilityElementsHidden = true
 
         let singleTap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleSingleTap(_:)))
         singleTap.numberOfTapsRequired = 1
