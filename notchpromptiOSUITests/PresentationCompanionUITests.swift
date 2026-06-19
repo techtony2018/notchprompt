@@ -18,48 +18,41 @@ final class PresentationCompanionUITests: XCTestCase {
 
         let title = app.staticTexts["PCompanion"].firstMatch
         XCTAssertTrue(title.waitForExistence(timeout: 8))
-        let prompt = app.otherElements["promptSurface"].firstMatch
-        XCTAssertTrue(prompt.waitForExistence(timeout: 8))
-        XCTAssertTrue(firstExistingButton(identifier: "pictureInPictureButton", label: "Start Picture in Picture").exists)
+        let configuration = app.descendants(matching: .any)["configurationSurface"].firstMatch
+        XCTAssertTrue(configuration.waitForExistence(timeout: 8))
+        XCTAssertTrue(app.staticTexts["V1.1"].firstMatch.exists || app.staticTexts["Version"].firstMatch.exists)
         addScreenshot(named: "portrait")
 
         XCUIDevice.shared.orientation = .landscapeLeft
         sleep(2)
 
         XCTAssertTrue(title.exists)
-        XCTAssertTrue(prompt.exists)
+        XCTAssertTrue(configuration.exists)
         addScreenshot(named: "landscape-left")
 
         XCUIDevice.shared.orientation = .landscapeRight
         sleep(2)
 
         XCTAssertTrue(title.exists)
-        XCTAssertTrue(prompt.exists)
+        XCTAssertTrue(configuration.exists)
         addScreenshot(named: "landscape-right")
     }
 
-    func testSettingsCanHideAndAutoScrollCanRun() throws {
+    func testConfigurationCanAutoScrollAfterPlaybackStarts() throws {
         XCUIDevice.shared.orientation = .portrait
         app.launch()
-
-        let settingsButton = firstExistingButton(identifier: "settingsButton", label: "Settings")
-        XCTAssertTrue(settingsButton.waitForExistence(timeout: 8))
-        settingsButton.tap()
 
         let editor = app.textViews["scriptEditor"].firstMatch
         XCTAssertTrue(editor.waitForExistence(timeout: 8))
 
-        app.buttons["Close"].firstMatch.tap()
-        XCTAssertTrue(settingsButton.waitForExistence(timeout: 4))
-
-        let prompt = app.otherElements["promptSurface"].firstMatch
-        XCTAssertTrue(prompt.waitForExistence(timeout: 4))
-        let startingOffset = Int((prompt.value as? String) ?? "0") ?? 0
+        let configuration = app.descendants(matching: .any)["configurationSurface"].firstMatch
+        XCTAssertTrue(configuration.waitForExistence(timeout: 4))
+        let startingOffset = Int((configuration.value as? String) ?? "0") ?? 0
 
         firstExistingButton(identifier: "playPauseButton", label: "Play").tap()
         sleep(5)
 
-        let endingOffset = Int((prompt.value as? String) ?? "0") ?? 0
+        let endingOffset = Int((configuration.value as? String) ?? "0") ?? 0
         XCTAssertGreaterThan(endingOffset, startingOffset)
     }
 

@@ -42,6 +42,9 @@ struct ContentView: View {
             Text("Configure playback, appearance, and display behavior for the overlay.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
+            Text(appVersionText)
+                .font(.footnote.weight(.medium))
+                .foregroundStyle(.secondary)
         }
         .padding(.bottom, 2)
     }
@@ -275,6 +278,11 @@ struct ContentView: View {
             return 0
         }
         return CGDirectDisplayID(n.uint32Value)
+    }
+
+    private var appVersionText: String {
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.1"
+        return "V\(version)"
     }
 }
 

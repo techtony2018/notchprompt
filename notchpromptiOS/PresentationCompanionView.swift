@@ -83,6 +83,8 @@ Thank you.
     @State private var shouldUseCountdownOnNextStart = true
     @State private var promptWidthFraction: CGFloat = 0.92
     @State private var promptHeightFraction: CGFloat = 0.72
+    @State private var pipWidth: Double = 420
+    @State private var pipHeight: Double = 260
     @State private var resizeStartFractions: CGSize?
     @State private var autoPauseResumeWithLocalMic = false
     @State private var autoAdjustSpeedToVoicePace = false
@@ -97,28 +99,27 @@ Thank you.
     var body: some View {
         GeometryReader { proxy in
             ZStack {
-                Color(.systemBackground)
-                    .ignoresSafeArea()
+                controls
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-                promptWindow(in: proxy.size)
-                    .frame(
-                        width: promptWidth(for: proxy.size),
-                        height: promptHeight(for: proxy.size)
-                    )
-                    .position(promptPosition(in: proxy))
+                pipMeasurementView(width: pipContentSize.width)
+                    .frame(width: pipContentSize.width, height: 1)
+                    .opacity(0)
+                    .accessibilityHidden(true)
 
                 PictureInPictureSourceView(
                     controller: pictureInPictureController,
-                    configuration: pictureInPictureConfiguration
+                    configuration: pictureInPictureConfiguration,
+                    actions: pictureInPictureActions
                 )
-                .frame(width: 2, height: 2)
+                .frame(width: 4, height: 4)
                 .accessibilityHidden(true)
+            }
+            .onAppear {
+                viewportHeight = pipContentSize.height
             }
         }
         .ignoresSafeArea(.keyboard, edges: .bottom)
-        .sheet(isPresented: $isSettingsPresented) {
-            controls
-        }
         .onReceive(timer) { date in
             tick(at: date)
         }
@@ -162,6 +163,107 @@ Thank you.
             }
             .accessibilityIdentifier("promptSurface")
             .accessibilityValue("\(Int(scrollOffset.rounded()))")
+    }
+
+    private var pipControlSurface: some View {
+        VStack(spacing: 18) {
+            Spacer(minLength: 0)
+
+            VStack(spacing: 8) {
+                Text("PCompanion")
+                    .font(.title2.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .accessibilityIdentifier("presentationTitle")
+
+                Text(pictureInPictureStatusText)
+                    .font(.footnote)
+                    .foregroundStyle(.white.opacity(0.68))
+                    .multilineTextAlignment(.center)
+                    .accessibilityIdentifier("pictureInPictureStatus")
+            }
+
+            HStack(spacing: 16) {
+                Button {
+                    resetScroll()
+                } label: {
+                Image(systemName: "arrow.counterclockwise")
+                        .frame(width: 44, height: 44)
+                }
+                .buttonStyle(.bordered)
+                .tint(.white)
+                .accessibilityLabel("Reset")
+
+                Button {
+                    togglePlayback()
+                } label: {
+                    Image(systemName: (isRunning || isCountingDown) ? "pause.fill" : "play.fill")
+                        .frame(width: 52, height: 52)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.white)
+                .foregroundStyle(.black)
+                .accessibilityLabel((isRunning || isCountingDown) ? "Pause" : "Play")
+                .accessibilityIdentifier("playPauseButton")
+
+                Button {
+                    openPictureInPicture()
+                } label: {
+                    Image(systemName: "pip.enter")
+                        .frame(width: 44, height: 44)
+                }
+                .buttonStyle(.bordered)
+                .tint(.white)
+                .accessibilityLabel("Open Picture in Picture")
+                .accessibilityIdentifier("pictureInPictureButton")
+
+                Button {
+                    isSettingsPresented = true
+                } label: {
+                    Image(systemName: "gearshape.fill")
+                        .frame(width: 44, height: 44)
+                }
+                .buttonStyle(.bordered)
+                .tint(.white)
+                .accessibilityLabel("Settings")
+                .accessibilityIdentifier("settingsButton")
+            }
+
+            Text("The script is shown in Picture in Picture. This screen only controls the floating prompt.")
+                .font(.footnote)
+                .foregroundStyle(.white.opacity(0.54))
+                .multilineTextAlignment(.center)
+                .padding(.horizontal)
+
+            Spacer(minLength: 0)
+        }
+        .accessibilityIdentifier("pipControlSurface")
+        .accessibilityValue("\(Int(scrollOffset.rounded()))")
+    }
+
+    private func pipMeasurementView(width: CGFloat) -> some View {
+        Text(script)
+            .font(.system(size: fontSize * 0.82, weight: .regular, design: .rounded))
+            .lineSpacing(fontSize * 0.35)
+            .padding(.horizontal, 18)
+            .padding(.top, 58)
+            .padding(.bottom, 18)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(width: width, alignment: .topLeading)
+            .background(
+                GeometryReader { contentProxy in
+                    Color.clear
+                        .onAppear {
+                            contentHeight = contentProxy.size.height
+                            viewportHeight = pipContentSize.height
+                            clampScroll()
+                        }
+                        .onChange(of: contentProxy.size.height) { _, height in
+                            contentHeight = height
+                            viewportHeight = pipContentSize.height
+                            clampScroll()
+                        }
+                }
+            )
     }
 
     private var promptSurface: some View {
@@ -310,9 +412,13 @@ Thank you.
                         Button {
                             togglePlayback()
                         } label: {
-                            Label(isRunning ? "Pause" : "Play", systemImage: isRunning ? "pause.fill" : "play.fill")
+                            Label(
+                                (isRunning || isCountingDown) ? "Pause" : "Play",
+                                systemImage: (isRunning || isCountingDown) ? "pause.fill" : "play.fill"
+                            )
                         }
                         .buttonStyle(.borderedProminent)
+                        .accessibilityLabel((isRunning || isCountingDown) ? "Pause" : "Play")
                     }
 
                     sliderRow("Speed", value: $speed, range: 20...180, step: 5, suffix: " pt/s")
@@ -354,8 +460,16 @@ Thank you.
 
                 Section("Appearance") {
                     sliderRow("Font size", value: $fontSize, range: 16...60, step: 1, suffix: " pt")
-                    sliderRow("Overlay width", value: promptWidthBinding, range: 48...98, step: 1, suffix: "%")
-                    sliderRow("Overlay height", value: promptHeightBinding, range: 36...94, step: 1, suffix: "%")
+                    sliderRow("PiP width", value: $pipWidth, range: 300...640, step: 10, suffix: " pt")
+                        .onChange(of: pipWidth) { _, _ in
+                            viewportHeight = pipContentSize.height
+                            clampScroll()
+                        }
+                    sliderRow("PiP height", value: $pipHeight, range: 180...420, step: 10, suffix: " pt")
+                        .onChange(of: pipHeight) { _, _ in
+                            viewportHeight = pipContentSize.height
+                            clampScroll()
+                        }
                     sliderRow("Opacity", value: $opacity, range: 0.35...1, step: 0.05) { value in
                         "\(Int((value * 100).rounded()))%"
                     }
@@ -387,11 +501,11 @@ Thank you.
 
                 Section("Picture in Picture") {
                     Button {
-                        pictureInPictureController.toggle()
+                        openPictureInPicture()
                     } label: {
                         Label(
-                            pictureInPictureController.isActive ? "Stop Picture in Picture" : "Start Picture in Picture",
-                            systemImage: pictureInPictureController.isActive ? "pip.exit" : "pip.enter"
+                            pictureInPictureController.isActive ? "Picture in Picture is active" : "Open Picture in Picture",
+                            systemImage: "pip.enter"
                         )
                     }
                     .disabled(!pictureInPictureController.isSupported)
@@ -408,9 +522,15 @@ Thank you.
                             .foregroundStyle(.secondary)
                     }
                 }
+
+                Section("About") {
+                    LabeledContent("Version", value: appVersionText)
+                }
             }
             .navigationTitle("PCompanion")
             .navigationBarTitleDisplayMode(.inline)
+            .accessibilityIdentifier("configurationSurface")
+            .accessibilityValue("\(Int(scrollOffset.rounded()))")
             .scrollDismissesKeyboard(.interactively)
             .background(
                 KeyboardDismissOnOutsideInput {
@@ -418,11 +538,10 @@ Thank you.
                 }
             )
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button("Close") {
-                        isScriptFocused = false
-                        isSettingsPresented = false
-                    }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Text(appVersionText)
+                        .font(.footnote.weight(.medium))
+                        .foregroundStyle(.secondary)
                 }
 
                 ToolbarItemGroup(placement: .keyboard) {
@@ -432,9 +551,32 @@ Thank you.
                     }
                 }
             }
+            .overlay(alignment: .topLeading) {
+                Color.clear
+                    .frame(width: 1, height: 1)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityIdentifier("configurationSurface")
+                    .accessibilityValue("\(Int(scrollOffset.rounded()))")
+            }
+            .safeAreaInset(edge: .bottom) {
+                Button {
+                    togglePlayback()
+                } label: {
+                    Label(
+                        (isRunning || isCountingDown) ? "Pause PiP Prompt" : "Start PiP Prompt",
+                        systemImage: (isRunning || isCountingDown) ? "pause.fill" : "play.fill"
+                    )
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .accessibilityLabel((isRunning || isCountingDown) ? "Pause" : "Play")
+                .accessibilityIdentifier("playPauseButton")
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+                .background(.regularMaterial)
+            }
         }
-        .presentationDetents([.medium, .large])
-        .presentationDragIndicator(.visible)
     }
 
     private func sliderRow(
@@ -477,10 +619,16 @@ Thank you.
         clampScroll()
     }
 
+    private func openPictureInPicture() {
+        guard pictureInPictureController.isSupported else {
+            pictureInPictureController.showUnsupportedMessage()
+            return
+        }
+        pictureInPictureController.start()
+    }
+
     private func togglePlayback() {
         isScriptFocused = false
-        isSettingsPresented = false
-
         if isRunning || isCountingDown {
             pauseManually()
         } else {
@@ -618,6 +766,7 @@ Thank you.
         shouldUseCountdownOnNextStart = false
         isRunning = true
         lastTickDate = nil
+        openPictureInPicture()
     }
 
     private func updateVoiceMonitor() {
@@ -747,14 +896,69 @@ Thank you.
         )
     }
 
+    private var pipContentSize: CGSize {
+        CGSize(width: pipWidth, height: pipHeight)
+    }
+
+    private var pictureInPictureStatusText: String {
+        if let message = pictureInPictureController.statusMessage {
+            return message
+        }
+        if pictureInPictureController.isActive {
+            return "Picture in Picture is active"
+        }
+        if pictureInPictureController.isSupported {
+            return "Opening Picture in Picture"
+        }
+        return "Picture in Picture is not available on this device"
+    }
+
+    private var appVersionText: String {
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.1"
+        return "V\(version)"
+    }
+
     private var pictureInPictureConfiguration: PictureInPicturePromptConfiguration {
         PictureInPicturePromptConfiguration(
             script: script,
             fontSize: fontSize,
             opacity: opacity,
             scrollOffset: scrollOffset,
-            isRunning: isRunning
+            isRunning: isRunning,
+            preferredContentSize: pipContentSize
         )
+    }
+
+    private var pictureInPictureActions: PictureInPicturePromptActions {
+        PictureInPicturePromptActions(
+            togglePlayback: {
+                togglePlayback()
+            },
+            toggleContentPlayback: {
+                guard clickContentTogglesPlayback else { return }
+                togglePlayback()
+            },
+            jumpBackward: { tapCount in
+                jump(seconds: -paceSeconds * Double(tapCount))
+            },
+            jumpForward: { tapCount in
+                jump(seconds: paceSeconds * Double(tapCount))
+            },
+            reset: {
+                resetScroll()
+            },
+            openSettings: {
+                openSettingsFromPictureInPicture()
+            }
+        )
+    }
+
+    private func openSettingsFromPictureInPicture() {
+        isScriptFocused = false
+        pictureInPictureController.stop()
+        if let url = URL(string: "pcompanion://settings") {
+            UIApplication.shared.open(url)
+        }
     }
 }
 

@@ -45,6 +45,10 @@ surface for iPhone and iPad.
 - Apple Silicon or Intel Mac for the macOS app.
 - iPhone or iPad running iOS 17 or later for the iOS app.
 
+## Version
+
+Current version: V1.1. Each pushed app update should increment the version by 0.1.
+
 ## Install (Recommended)
 
 1. Open GitHub Releases:
