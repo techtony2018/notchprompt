@@ -6,6 +6,28 @@
 import SwiftUI
 import UIKit
 
+private enum IOSScrollMode: String, CaseIterable {
+    case infinite
+    case stopAtEnd
+}
+
+private enum IOSCountdownBehavior: String, CaseIterable {
+    case always
+    case freshStartOnly
+    case never
+
+    var label: String {
+        switch self {
+        case .always:
+            return "Always"
+        case .freshStartOnly:
+            return "Fresh start only"
+        case .never:
+            return "Never"
+        }
+    }
+}
+
 struct PresentationCompanionView: View {
     @StateObject private var voiceMonitor = IOSLocalMicrophoneVoiceMonitor()
     @StateObject private var pictureInPictureController = IOSPictureInPicturePromptController()
@@ -52,13 +74,22 @@ Thank you.
     @State private var contentHeight: CGFloat = 1
     @State private var lastTickDate: Date?
     @State private var isSettingsPresented = false
+    @State private var clickContentTogglesPlayback = true
+    @State private var scrollMode: IOSScrollMode = .infinite
+    @State private var countdownBehavior: IOSCountdownBehavior = .freshStartOnly
+    @State private var countdownSeconds = 3
+    @State private var isCountingDown = false
+    @State private var countdownRemaining = 0
+    @State private var shouldUseCountdownOnNextStart = true
     @State private var promptWidthFraction: CGFloat = 0.92
     @State private var promptHeightFraction: CGFloat = 0.72
     @State private var resizeStartFractions: CGSize?
     @State private var autoPauseResumeWithLocalMic = false
     @State private var autoAdjustSpeedToVoicePace = false
+    @State private var voiceDetectionThresholdDb = 5.0
     @State private var isPausedByVoiceMonitor = false
     @State private var isVoiceResumeBlockedByManualPause = false
+    @State private var countdownTask: Task<Void, Never>?
     @FocusState private var isScriptFocused: Bool
 
     private let timer = Timer.publish(every: 1.0 / 60.0, on: .main, in: .common).autoconnect()
@@ -100,6 +131,9 @@ Thank you.
         .onChange(of: autoAdjustSpeedToVoicePace) { _, _ in
             updateVoiceMonitor()
         }
+        .onChange(of: voiceDetectionThresholdDb) { _, thresholdDb in
+            voiceMonitor.voiceDetectionThresholdDb = thresholdDb
+        }
         .onChange(of: voiceMonitor.isVoiceActive) { _, isVoiceActive in
             handleVoiceActivityChanged(isVoiceActive)
         }
@@ -107,6 +141,7 @@ Thank you.
             updateSpeakingPace(wordsPerMinute)
         }
         .onDisappear {
+            countdownTask?.cancel()
             voiceMonitor.stop()
         }
     }
@@ -195,14 +230,14 @@ Thank you.
             Button {
                 togglePlayback()
             } label: {
-                Image(systemName: isRunning ? "pause.fill" : "play.fill")
+                Image(systemName: (isRunning || isCountingDown) ? "pause.fill" : "play.fill")
                     .font(.headline)
                     .frame(width: 34, height: 34)
             }
             .buttonStyle(.plain)
             .foregroundStyle(.white)
             .background(.white.opacity(0.16), in: Circle())
-            .accessibilityLabel(isRunning ? "Pause" : "Play")
+            .accessibilityLabel((isRunning || isCountingDown) ? "Pause" : "Play")
             .accessibilityIdentifier("playPauseButton")
             .layoutPriority(1)
 
@@ -281,16 +316,55 @@ Thank you.
                     }
 
                     sliderRow("Speed", value: $speed, range: 20...180, step: 5, suffix: " pt/s")
+
+                    Picker("Scroll mode", selection: $scrollMode) {
+                        Text("Infinite").tag(IOSScrollMode.infinite)
+                        Text("Stop at end").tag(IOSScrollMode.stopAtEnd)
+                    }
+                    .pickerStyle(.segmented)
+
+                    Picker("Countdown", selection: $countdownBehavior) {
+                        ForEach(IOSCountdownBehavior.allCases, id: \.self) { behavior in
+                            Text(behavior.label).tag(behavior)
+                        }
+                    }
+                    .pickerStyle(.menu)
+
+                    sliderRow(
+                        "Countdown duration",
+                        value: Binding(
+                            get: { Double(countdownSeconds) },
+                            set: { countdownSeconds = Int($0.rounded()) }
+                        ),
+                        range: 0...10,
+                        step: 1,
+                        suffix: "s"
+                    )
+                    .disabled(countdownBehavior == .never)
+
+                    if isCountingDown {
+                        Text("Starting in \(countdownRemaining)s")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    sliderRow("Fast forward/backward scrolling pace", value: $paceSeconds, range: 1...30, step: 1, suffix: "s")
+                    Toggle("Click content area to start, pause, or resume", isOn: $clickContentTogglesPlayback)
+                }
+
+                Section("Appearance") {
                     sliderRow("Font size", value: $fontSize, range: 16...60, step: 1, suffix: " pt")
+                    sliderRow("Overlay width", value: promptWidthBinding, range: 48...98, step: 1, suffix: "%")
+                    sliderRow("Overlay height", value: promptHeightBinding, range: 36...94, step: 1, suffix: "%")
                     sliderRow("Opacity", value: $opacity, range: 0.35...1, step: 0.05) { value in
                         "\(Int((value * 100).rounded()))%"
                     }
-                    sliderRow("Fast forward/backward scrolling pace", value: $paceSeconds, range: 1...30, step: 1, suffix: "s")
                 }
 
                 Section("Voice") {
                     Toggle("Auto pause/resume from local mic", isOn: $autoPauseResumeWithLocalMic)
                     Toggle("Auto adjust speed to speaking pace", isOn: $autoAdjustSpeedToVoicePace)
+                    sliderRow("Voice detection threshold", value: $voiceDetectionThresholdDb, range: 0...30, step: 1, suffix: " dB")
 
                     if voiceMonitor.isMonitoring {
                         Text("Mic: \(voiceMonitor.isVoiceActive ? "voice detected" : "listening") · \(Int(voiceMonitor.inputLevelDb.rounded())) dB")
@@ -407,17 +481,10 @@ Thank you.
         isScriptFocused = false
         isSettingsPresented = false
 
-        if isRunning {
-            isRunning = false
-            isPausedByVoiceMonitor = false
-            if autoPauseResumeWithLocalMic {
-                isVoiceResumeBlockedByManualPause = true
-            }
+        if isRunning || isCountingDown {
+            pauseManually()
         } else {
-            isRunning = true
-            isVoiceResumeBlockedByManualPause = false
-            isPausedByVoiceMonitor = false
-            lastTickDate = nil
+            resumeManually()
         }
     }
 
@@ -426,6 +493,7 @@ Thank you.
         case .left:
             jump(seconds: -paceSeconds * Double(tapCount))
         case .center:
+            guard clickContentTogglesPlayback else { return }
             togglePlayback()
         case .right:
             jump(seconds: paceSeconds * Double(tapCount))
@@ -438,20 +506,118 @@ Thank you.
     }
 
     private func resetScroll() {
-        isRunning = false
+        stopPlayback()
         scrollOffset = 0
         lastTickDate = nil
         isPausedByVoiceMonitor = false
         isVoiceResumeBlockedByManualPause = false
+        shouldUseCountdownOnNextStart = true
     }
 
     private func clampScroll() {
         let maxOffset = max(contentHeight - viewportHeight, 0)
-        scrollOffset = min(max(scrollOffset, 0), maxOffset)
-        if scrollOffset >= maxOffset, maxOffset > 0 {
-            isRunning = false
-            isPausedByVoiceMonitor = false
+        if scrollOffset < 0 {
+            scrollOffset = 0
         }
+
+        guard maxOffset > 0 else {
+            scrollOffset = 0
+            return
+        }
+
+        if scrollMode == .infinite, isRunning, scrollOffset >= maxOffset {
+            scrollOffset = 0
+            return
+        }
+
+        scrollOffset = min(scrollOffset, maxOffset)
+        if scrollMode == .stopAtEnd, scrollOffset >= maxOffset {
+            stopPlayback()
+        }
+    }
+
+    private func pauseManually() {
+        stopPlayback()
+        isPausedByVoiceMonitor = false
+        if autoPauseResumeWithLocalMic {
+            isVoiceResumeBlockedByManualPause = true
+        }
+    }
+
+    private func resumeManually() {
+        isVoiceResumeBlockedByManualPause = false
+        startPlayback()
+    }
+
+    private func startPlayback() {
+        guard !isRunning, !isCountingDown else { return }
+
+        isPausedByVoiceMonitor = false
+        if scrollMode == .stopAtEnd {
+            let maxOffset = max(contentHeight - viewportHeight, 0)
+            if maxOffset > 0, scrollOffset >= maxOffset {
+                scrollOffset = 0
+            }
+        }
+
+        let delay = max(0, countdownSeconds)
+        let shouldRunCountdown: Bool
+        switch countdownBehavior {
+        case .always:
+            shouldRunCountdown = delay > 0
+        case .freshStartOnly:
+            shouldRunCountdown = delay > 0 && shouldUseCountdownOnNextStart
+        case .never:
+            shouldRunCountdown = false
+        }
+
+        guard shouldRunCountdown else {
+            beginRunningNow()
+            return
+        }
+
+        beginCountdown(seconds: delay)
+    }
+
+    private func stopPlayback() {
+        countdownTask?.cancel()
+        countdownTask = nil
+        isCountingDown = false
+        countdownRemaining = 0
+        isRunning = false
+    }
+
+    private func beginCountdown(seconds: Int) {
+        countdownTask?.cancel()
+        isRunning = false
+        isCountingDown = true
+        countdownRemaining = seconds
+
+        countdownTask = Task { @MainActor in
+            var remaining = seconds
+            while remaining > 0 {
+                do {
+                    try await Task.sleep(nanoseconds: 1_000_000_000)
+                } catch {
+                    stopPlayback()
+                    return
+                }
+                remaining -= 1
+                countdownRemaining = remaining
+            }
+
+            guard !Task.isCancelled else { return }
+            beginRunningNow()
+            countdownTask = nil
+        }
+    }
+
+    private func beginRunningNow() {
+        isCountingDown = false
+        countdownRemaining = 0
+        shouldUseCountdownOnNextStart = false
+        isRunning = true
+        lastTickDate = nil
     }
 
     private func updateVoiceMonitor() {
@@ -462,6 +628,7 @@ Thank you.
             return
         }
 
+        voiceMonitor.voiceDetectionThresholdDb = voiceDetectionThresholdDb
         voiceMonitor.start()
     }
 
@@ -471,15 +638,15 @@ Thank you.
         if isVoiceActive {
             guard isPausedByVoiceMonitor,
                   !isVoiceResumeBlockedByManualPause,
-                  !isRunning else { return }
+                  !isRunning,
+                  !isCountingDown else { return }
             isPausedByVoiceMonitor = false
-            isRunning = true
-            lastTickDate = nil
+            startPlayback()
             return
         }
 
-        guard isRunning else { return }
-        isRunning = false
+        guard isRunning || isCountingDown else { return }
+        stopPlayback()
         isPausedByVoiceMonitor = true
         lastTickDate = nil
     }
@@ -564,6 +731,20 @@ Thank you.
 
     private func clamp(_ value: CGFloat, min minimum: CGFloat, max maximum: CGFloat) -> CGFloat {
         Swift.min(Swift.max(value, minimum), maximum)
+    }
+
+    private var promptWidthBinding: Binding<Double> {
+        Binding(
+            get: { Double(promptWidthFraction * 100) },
+            set: { promptWidthFraction = CGFloat($0 / 100) }
+        )
+    }
+
+    private var promptHeightBinding: Binding<Double> {
+        Binding(
+            get: { Double(promptHeightFraction * 100) },
+            set: { promptHeightFraction = CGFloat($0 / 100) }
+        )
     }
 
     private var pictureInPictureConfiguration: PictureInPicturePromptConfiguration {

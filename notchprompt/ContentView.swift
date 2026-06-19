@@ -148,6 +148,11 @@ struct ContentView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Toggle("Auto pause/resume from local mic", isOn: $model.autoPauseResumeWithLocalMic)
                     Toggle("Auto adjust speed to speaking pace", isOn: $model.autoAdjustSpeedToVoicePace)
+                    sliderRow(
+                        title: "Voice detection threshold",
+                        valueText: "\(Int(model.voiceDetectionThresholdDb.rounded())) dB",
+                        slider: Slider(value: $model.voiceDetectionThresholdDb, in: 0...30, step: 1)
+                    )
                     if let message = model.voiceControlUnavailableMessage {
                         Text(message)
                             .font(.footnote)

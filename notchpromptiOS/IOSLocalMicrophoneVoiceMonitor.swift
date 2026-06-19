@@ -22,8 +22,14 @@ final class IOSLocalMicrophoneVoiceMonitor: ObservableObject {
     private var recentPeakDates: [Date] = []
     private var wasAbovePeakThreshold = false
 
-    private let activationThresholdDb: Float = -42
-    private let peakThresholdDb: Float = -32
+    var voiceDetectionThresholdDb: Double = 5 {
+        didSet {
+            voiceDetectionThresholdDb = min(max(voiceDetectionThresholdDb, 0), 30)
+        }
+    }
+
+    private let activationThresholdBaseDb: Float = -47
+    private let peakThresholdOffsetDb: Float = 10
     private let activationDuration: TimeInterval = 0.14
     private let releaseDuration: TimeInterval = 0.85
     private let minimumPeakSpacing: TimeInterval = 0.16
@@ -109,6 +115,7 @@ final class IOSLocalMicrophoneVoiceMonitor: ObservableObject {
         let db = rmsDb(buffer)
         let now = Date()
         updateInputLevel(db, at: now)
+        let activationThresholdDb = activationThresholdBaseDb + Float(voiceDetectionThresholdDb)
 
         if db >= activationThresholdDb {
             if voiceStartDate == nil {
@@ -133,6 +140,7 @@ final class IOSLocalMicrophoneVoiceMonitor: ObservableObject {
     }
 
     private func trackSpeakingPeak(db: Float, at now: Date) {
+        let peakThresholdDb = activationThresholdBaseDb + Float(voiceDetectionThresholdDb) + peakThresholdOffsetDb
         let isAbovePeakThreshold = db >= peakThresholdDb
         defer { wasAbovePeakThreshold = isAbovePeakThreshold }
 

@@ -34,7 +34,7 @@ surface for iPhone and iPad.
 - Optional countdown before scrolling starts.
 - Edit scripts directly in Settings with a scrollable, resizable text area.
 - Import/export plain text scripts.
-- Optional local-microphone controls for auto pause/resume and automatic speed adjustment based on speaking pace on macOS and iOS.
+- Optional local-microphone controls for auto pause/resume and automatic speed adjustment based on speaking pace on macOS and iOS, guarded by a configurable voice detection threshold that defaults to 5 dB.
 - Voice-triggered resume is blocked after a mouse pause until you click to resume, so Q&A audio does not restart the script.
 - Privacy mode (`NSWindow.SharingType`, best-effort/app-dependent).
 

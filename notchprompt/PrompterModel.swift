@@ -48,6 +48,7 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
     @Published var clickContentTogglesPlayback: Bool = true
     @Published var autoPauseResumeWithLocalMic: Bool = false
     @Published var autoAdjustSpeedToVoicePace: Bool = false
+    @Published var voiceDetectionThresholdDb: Double = 5
     @Published var voiceControlUnavailableMessage: String?
     @Published private(set) var detectedVoiceWordsPerMinute: Double?
     @Published private(set) var hasStartedSession: Bool = false
@@ -99,6 +100,7 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
         static let clickContentDefaultEnabledMigration = "clickContentDefaultEnabledMigration"
         static let autoPauseResumeWithLocalMic = "autoPauseResumeWithLocalMic"
         static let autoAdjustSpeedToVoicePace = "autoAdjustSpeedToVoicePace"
+        static let voiceDetectionThresholdDb = "voiceDetectionThresholdDb"
         static let speed = "speedPointsPerSecond"
         static let fontSize = "fontSize"
         static let overlayWidth = "overlayWidth"
@@ -385,6 +387,7 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
         }
         autoPauseResumeWithLocalMic = defaults.object(forKey: DefaultsKey.autoPauseResumeWithLocalMic) as? Bool ?? autoPauseResumeWithLocalMic
         autoAdjustSpeedToVoicePace = defaults.object(forKey: DefaultsKey.autoAdjustSpeedToVoicePace) as? Bool ?? autoAdjustSpeedToVoicePace
+        voiceDetectionThresholdDb = clamp(defaults.object(forKey: DefaultsKey.voiceDetectionThresholdDb) as? Double ?? voiceDetectionThresholdDb, lower: 0, upper: 30)
         isOverlayVisible = defaults.object(forKey: DefaultsKey.isOverlayVisible) as? Bool ?? true
         // Never auto-start on launch; require explicit user start each session.
         isRunning = false
@@ -433,6 +436,7 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
         defaults.set(clickContentTogglesPlayback, forKey: DefaultsKey.clickContentTogglesPlayback)
         defaults.set(autoPauseResumeWithLocalMic, forKey: DefaultsKey.autoPauseResumeWithLocalMic)
         defaults.set(autoAdjustSpeedToVoicePace, forKey: DefaultsKey.autoAdjustSpeedToVoicePace)
+        defaults.set(voiceDetectionThresholdDb, forKey: DefaultsKey.voiceDetectionThresholdDb)
         defaults.set(speedPointsPerSecond, forKey: DefaultsKey.speed)
         defaults.set(fontSize, forKey: DefaultsKey.fontSize)
         defaults.set(overlayWidth, forKey: DefaultsKey.overlayWidth)

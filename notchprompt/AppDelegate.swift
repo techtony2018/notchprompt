@@ -101,6 +101,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             }
             .store(in: &cancellables)
 
+        model.$voiceDetectionThresholdDb
+            .removeDuplicates { Int($0.rounded()) == Int($1.rounded()) }
+            .receive(on: RunLoop.main)
+            .sink { [weak self] thresholdDb in
+                self?.voiceMonitor?.voiceDetectionThresholdDb = thresholdDb
+            }
+            .store(in: &cancellables)
+
         NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
@@ -118,6 +126,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             model.$clickContentTogglesPlayback.map { _ in () }.eraseToAnyPublisher(),
             model.$autoPauseResumeWithLocalMic.map { _ in () }.eraseToAnyPublisher(),
             model.$autoAdjustSpeedToVoicePace.map { _ in () }.eraseToAnyPublisher(),
+            model.$voiceDetectionThresholdDb.map { _ in () }.eraseToAnyPublisher(),
             model.$speedPointsPerSecond.map { _ in () }.eraseToAnyPublisher(),
             model.$fontSize.map { _ in () }.eraseToAnyPublisher(),
             model.$overlayWidth.map { _ in () }.eraseToAnyPublisher(),
@@ -163,6 +172,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             )
         }
 
+        voiceMonitor?.voiceDetectionThresholdDb = model.voiceDetectionThresholdDb
         voiceMonitor?.start()
     }
 

@@ -57,7 +57,7 @@ final class PresentationCompanionUITests: XCTestCase {
         let startingOffset = Int((prompt.value as? String) ?? "0") ?? 0
 
         firstExistingButton(identifier: "playPauseButton", label: "Play").tap()
-        sleep(2)
+        sleep(5)
 
         let endingOffset = Int((prompt.value as? String) ?? "0") ?? 0
         XCTAssertGreaterThan(endingOffset, startingOffset)
