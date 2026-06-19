@@ -92,6 +92,8 @@ Thank you.
     @State private var isPausedByVoiceMonitor = false
     @State private var isVoiceResumeBlockedByManualPause = false
     @State private var countdownTask: Task<Void, Never>?
+    @State private var shouldHideAppWhenPictureInPictureStarts = false
+    @State private var isReturningToSettings = false
     @FocusState private var isScriptFocused: Bool
 
     private let timer = Timer.publish(every: 1.0 / 60.0, on: .main, in: .common).autoconnect()
@@ -117,6 +119,12 @@ Thank you.
             }
             .onAppear {
                 viewportHeight = pipContentSize.height
+                pictureInPictureController.onDidStart = {
+                    handlePictureInPictureDidStart()
+                }
+                pictureInPictureController.onDidStop = {
+                    handlePictureInPictureDidStop()
+                }
             }
         }
         .ignoresSafeArea(.keyboard, edges: .bottom)
@@ -144,6 +152,8 @@ Thank you.
         .onDisappear {
             countdownTask?.cancel()
             voiceMonitor.stop()
+            pictureInPictureController.onDidStart = nil
+            pictureInPictureController.onDidStop = nil
         }
     }
 
@@ -632,7 +642,7 @@ Thank you.
         if isRunning || isCountingDown {
             pauseManually()
         } else {
-            resumeManually()
+            resumeManually(hideAppAfterPictureInPictureStarts: true)
         }
     }
 
@@ -692,15 +702,21 @@ Thank you.
         }
     }
 
-    private func resumeManually() {
+    private func resumeManually(hideAppAfterPictureInPictureStarts: Bool) {
         isVoiceResumeBlockedByManualPause = false
-        startPlayback()
+        startPlayback(hideAppAfterPictureInPictureStarts: hideAppAfterPictureInPictureStarts)
     }
 
-    private func startPlayback() {
+    private func startPlayback(hideAppAfterPictureInPictureStarts: Bool) {
         guard !isRunning, !isCountingDown else { return }
 
         isPausedByVoiceMonitor = false
+        isReturningToSettings = false
+        if hideAppAfterPictureInPictureStarts, !pictureInPictureController.isActive {
+            shouldHideAppWhenPictureInPictureStarts = true
+            openPictureInPicture()
+        }
+
         if scrollMode == .stopAtEnd {
             let maxOffset = max(contentHeight - viewportHeight, 0)
             if maxOffset > 0, scrollOffset >= maxOffset {
@@ -790,7 +806,7 @@ Thank you.
                   !isRunning,
                   !isCountingDown else { return }
             isPausedByVoiceMonitor = false
-            startPlayback()
+            startPlayback(hideAppAfterPictureInPictureStarts: false)
             return
         }
 
@@ -955,9 +971,35 @@ Thank you.
 
     private func openSettingsFromPictureInPicture() {
         isScriptFocused = false
+        isReturningToSettings = true
+        shouldHideAppWhenPictureInPictureStarts = false
+        stopPlayback()
         pictureInPictureController.stop()
         if let url = URL(string: "pcompanion://settings") {
             UIApplication.shared.open(url)
+        }
+    }
+
+    private func handlePictureInPictureDidStart() {
+        guard shouldHideAppWhenPictureInPictureStarts else { return }
+        shouldHideAppWhenPictureInPictureStarts = false
+        hideForegroundAppForPresentation()
+    }
+
+    private func handlePictureInPictureDidStop() {
+        guard isReturningToSettings else { return }
+        isReturningToSettings = false
+    }
+
+    private func hideForegroundAppForPresentation() {
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            UIApplication.shared.sendAction(
+                NSSelectorFromString("suspend"),
+                to: UIApplication.shared,
+                from: nil,
+                for: nil
+            )
         }
     }
 }

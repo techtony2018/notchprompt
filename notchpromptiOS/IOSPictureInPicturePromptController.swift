@@ -46,6 +46,8 @@ final class IOSPictureInPicturePromptController: NSObject, ObservableObject {
     @Published private(set) var isSupported = AVPictureInPictureController.isPictureInPictureSupported()
     @Published private(set) var isActive = false
     @Published var statusMessage: String?
+    var onDidStart: (() -> Void)?
+    var onDidStop: (() -> Void)?
 
     private let contentViewController = AVPictureInPictureVideoCallViewController()
     private let promptView = PictureInPicturePromptView()
@@ -162,12 +164,14 @@ extension IOSPictureInPicturePromptController: AVPictureInPictureControllerDeleg
         Task { @MainActor in
             self.statusMessage = nil
             self.isActive = true
+            self.onDidStart?()
         }
     }
 
     nonisolated func pictureInPictureControllerDidStopPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {
         Task { @MainActor in
             self.isActive = false
+            self.onDidStop?()
         }
     }
 
