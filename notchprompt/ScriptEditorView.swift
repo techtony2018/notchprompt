@@ -29,7 +29,7 @@ struct ScriptEditorView: View {
 
                 Spacer()
 
-                Text("Estimated read time: \(model.formattedEstimatedReadDuration())")
+                Text("\(model.scriptWordCount) words · Estimated read time: \(model.formattedEstimatedReadDuration())")
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
             }
@@ -70,4 +70,3 @@ struct ScriptEditorView: View {
         }
     }
 }
-

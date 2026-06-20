@@ -11,8 +11,12 @@ import CoreGraphics
 
 struct ContentView: View {
     @ObservedObject private var model = PrompterModel.shared
-    @State private var scriptEditorHeight: CGFloat = 180
-    @State private var scriptEditorResizeStartHeight: CGFloat?
+    @State private var isLoadLinkSheetPresented = false
+    @State private var linkInput = ""
+    @State private var isLoadingLink = false
+    @State private var loadLinkErrorMessage: String?
+    @AppStorage("scriptEditorHeight") private var scriptEditorHeight: Double = 220
+    @State private var scriptEditorResizeStartHeight: Double?
 
     private let rowLabelWidth: CGFloat = 164
     private let valueWidth: CGFloat = 64
@@ -33,56 +37,131 @@ struct ContentView: View {
         }
         .modifier(ScrollBounceBehaviorModifier())
         .frame(minWidth: 620, minHeight: 460)
+        .onChange(of: model.script) { _, _ in
+            model.refreshDetectedTranscriptLanguage()
+        }
+        .onChange(of: model.transcriptMatchConsecutiveWords) { _, _ in
+            model.resetTranscriptProgress()
+        }
+        .onChange(of: model.transcriptMaxForwardLookingWords) { _, _ in
+            model.resetTranscriptProgress()
+        }
+        .sheet(isPresented: $isLoadLinkSheetPresented) {
+            LoadLinkSheet(
+                linkInput: $linkInput,
+                isLoading: isLoadingLink,
+                errorMessage: loadLinkErrorMessage,
+                onCancel: {
+                    isLoadLinkSheetPresented = false
+                },
+                onLoad: {
+                    Task {
+                        await loadScriptFromLink()
+                    }
+                }
+            )
+        }
     }
 
     private var headerSection: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Settings")
-                .font(.title3.weight(.semibold))
-            Text("Configure playback, appearance, and display behavior for the overlay.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-            Text(appVersionText)
-                .font(.footnote.weight(.medium))
-                .foregroundStyle(.secondary)
+        HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Presentation Companion")
+                    .font(.title3.weight(.semibold))
+                Text("Configure playback, appearance, and display behavior for the overlay.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                Text(appVersionText)
+                    .font(.footnote.weight(.medium))
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer(minLength: 16)
+
+            Image(nsImage: NSApp.applicationIconImage)
+                .resizable()
+                .frame(width: 44, height: 44)
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         }
         .padding(.bottom, 2)
     }
 
     private var scriptSection: some View {
-        SettingsSection(title: "Script") {
+        SettingsSection(title: "Presentation Script") {
             VStack(alignment: .leading, spacing: 6) {
-                TextEditor(text: $model.script)
-                    .font(.system(size: 13, design: .monospaced))
-                    .scrollContentBackground(.hidden)
+                ProgressAwareScriptTextView(
+                    text: $model.script,
+                    progressUTF16Offset: model.scriptProgressCharacterEnd
+                )
                     .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 6))
                     .overlay(
                         RoundedRectangle(cornerRadius: 6)
                             .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
                     )
-                    .frame(minHeight: 120)
                     .frame(height: scriptEditorHeight)
 
-                HStack {
-                    Spacer(minLength: 0)
-                    Image(systemName: "arrow.up.left.and.arrow.down.right")
-                        .font(.system(size: 11, weight: .medium))
+                scriptEditorResizeHandle
+
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    Text("\(model.scriptWordCount) words · Estimated read time: \(model.formattedEstimatedReadDuration())")
+                        .font(.footnote)
                         .foregroundStyle(.secondary)
-                        .padding(6)
-                        .contentShape(Rectangle())
-                        .gesture(
-                            DragGesture()
-                                .onChanged { value in
-                                    let startHeight = scriptEditorResizeStartHeight ?? scriptEditorHeight
-                                    scriptEditorResizeStartHeight = startHeight
-                                    scriptEditorHeight = min(max(120, startHeight + value.translation.height), 520)
-                                }
-                                .onEnded { _ in
-                                    scriptEditorResizeStartHeight = nil
-                                }
-                        )
+
+                    Spacer(minLength: 8)
+
+                    HStack(spacing: 4) {
+                        Text("Detected: \(model.detectedTranscriptLanguageLabel). Using:")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                        Picker("", selection: $model.transcriptLanguageIdentifier) {
+                            Text("Auto (\(model.detectedTranscriptLanguageLabel))").tag("auto")
+                            ForEach(PrompterModel.transcriptLanguageOptions.filter { $0.id != "auto" }) { option in
+                                Text(option.label).tag(option.id)
+                            }
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.menu)
+                    }
                 }
-                .frame(height: 18)
+
+                if !model.sourceLink.isEmpty {
+                    if let url = URL(string: model.sourceLink) {
+                        Link(model.sourceLink, destination: url)
+                            .font(.footnote)
+                            .lineLimit(2)
+                    } else {
+                        Text(model.sourceLink)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
+                }
+
+                HStack(spacing: 10) {
+                    Button(role: .destructive) {
+                        model.resetScroll()
+                    } label: {
+                        Label("Reset", systemImage: "arrow.counterclockwise")
+                    }
+
+                    Button {
+                        linkInput = ""
+                        loadLinkErrorMessage = nil
+                        isLoadLinkSheetPresented = true
+                    } label: {
+                        Label("Load from Link", systemImage: "link")
+                    }
+
+                    if isLoadingLink {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text("Loading link...")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Spacer(minLength: 0)
+                }
             }
         }
     }
@@ -91,9 +170,9 @@ struct ContentView: View {
         SettingsSection(title: "Playback") {
             VStack(alignment: .leading, spacing: 12) {
                 sliderRow(
-                    title: "Speed",
-                    valueText: "\(Int(model.speedPointsPerSecond))",
-                    slider: Slider(value: $model.speedPointsPerSecond, in: 10...300, step: 5)
+                    title: "Scroll speed",
+                    valueText: "\(Int(model.secondsPerLine))s/line",
+                    slider: Slider(value: $model.secondsPerLine, in: PrompterModel.secondsPerLineRange, step: PrompterModel.secondsPerLineStep)
                 )
 
                 HStack(alignment: .firstTextBaseline) {
@@ -141,33 +220,99 @@ struct ContentView: View {
                 )
 
                 sliderRow(
-                    title: "Fast forward/backward scrolling pace",
-                    valueText: "\(Int(model.scrollingPaceSeconds))s",
-                    slider: Slider(value: $model.scrollingPaceSeconds, in: 1...30, step: 1)
+                    title: "Forward/backward pace",
+                    valueText: "\(Int(model.scrollingPaceLines)) lines",
+                    slider: Slider(value: $model.scrollingPaceLines, in: PrompterModel.scrollingPaceLinesRange, step: 1)
                 )
 
                 Toggle("Click content area to start, pause, or resume", isOn: $model.clickContentTogglesPlayback)
 
                 VStack(alignment: .leading, spacing: 4) {
-                    Toggle("Auto pause/resume from local mic", isOn: $model.autoPauseResumeWithLocalMic)
-                    Toggle("Auto adjust speed to speaking pace", isOn: $model.autoAdjustSpeedToVoicePace)
+                    Toggle(
+                        "Auto pause/resume from voice",
+                        isOn: Binding(
+                            get: { model.autoPauseResumeWithLocalMic },
+                            set: { model.setAutoPauseResumeWithLocalMic($0) }
+                        )
+                    )
                     sliderRow(
                         title: "Voice detection threshold",
                         valueText: "\(Int(model.voiceDetectionThresholdDb.rounded())) dB",
-                        slider: Slider(value: $model.voiceDetectionThresholdDb, in: 0...30, step: 1)
+                        slider: Slider(value: $model.voiceDetectionThresholdDb, in: -70...20, step: 1)
                     )
+                    .padding(.leading, 18)
+                    .disabled(!model.autoPauseResumeWithLocalMic)
+                    .opacity(model.autoPauseResumeWithLocalMic ? 1 : 0.55)
+
+                    Toggle(
+                        "Transcript based prompt",
+                        isOn: Binding(
+                            get: { model.transcriptBasedPrompt },
+                            set: { model.setTranscriptBasedPrompt($0) }
+                        )
+                    )
+                    HStack {
+                        Text("Match consecutive words")
+                            .frame(width: rowLabelWidth, alignment: .leading)
+                        Stepper(
+                            "\(model.transcriptMatchConsecutiveWords)",
+                            value: $model.transcriptMatchConsecutiveWords,
+                            in: 1...10
+                        )
+                        .frame(width: 96, alignment: .leading)
+                    }
+                    .padding(.leading, 18)
+                    .disabled(!model.transcriptBasedPrompt)
+                    .opacity(model.transcriptBasedPrompt ? 1 : 0.55)
+
+                    HStack {
+                        Text("Max forward looking words")
+                            .frame(width: rowLabelWidth, alignment: .leading)
+                        Stepper(
+                            "\(model.transcriptMaxForwardLookingWords)",
+                            value: $model.transcriptMaxForwardLookingWords,
+                            in: 5...100
+                        )
+                        .frame(width: 96, alignment: .leading)
+                    }
+                    .padding(.leading, 18)
+                    .disabled(!model.transcriptBasedPrompt)
+                    .opacity(model.transcriptBasedPrompt ? 1 : 0.55)
                     if let message = model.voiceControlUnavailableMessage {
                         Text(message)
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
-                    if let wordsPerMinute = model.detectedVoiceWordsPerMinute {
-                        Text("Detected pace: \(Int(wordsPerMinute.rounded())) wpm")
+                    if let message = model.transcriptUnavailableMessage {
+                        Text(message)
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
                 }
             }
+        }
+    }
+
+    private var scriptEditorResizeHandle: some View {
+        HStack {
+            Spacer()
+            Image(systemName: "line.3.horizontal")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 56, height: 18)
+                .contentShape(Rectangle())
+                .gesture(
+                    DragGesture()
+                        .onChanged { value in
+                            let startHeight = scriptEditorResizeStartHeight ?? scriptEditorHeight
+                            scriptEditorResizeStartHeight = startHeight
+                            scriptEditorHeight = min(max(startHeight + Double(value.translation.height), 140), 640)
+                        }
+                        .onEnded { _ in
+                            scriptEditorResizeStartHeight = nil
+                        }
+                )
+                .help("Drag to resize script editor")
         }
     }
 
@@ -189,7 +334,7 @@ struct ContentView: View {
                 sliderRow(
                     title: "Overlay height",
                     valueText: "\(Int(model.overlayHeight))",
-                    slider: Slider(value: $model.overlayHeight, in: 120...300, step: 2)
+                    slider: Slider(value: $model.overlayHeight, in: PrompterModel.overlayHeightRange.lowerBound...model.maximumOverlayHeight(), step: 2)
                 )
 
                 sliderRow(
@@ -236,7 +381,7 @@ struct ContentView: View {
             VStack(alignment: .leading, spacing: 6) {
                 shortcutRow("Option+Command+P", "Start / Pause")
                 shortcutRow("Option+Command+R", "Reset scroll")
-                shortcutRow("Option+Command+J", "Jump back 5 seconds")
+                shortcutRow("Option+Command+J", "Jump back by the configured line pace")
                 shortcutRow("Option+Command+H", "Toggle privacy mode")
                 shortcutRow("Option+Command+O", "Toggle overlay visibility")
                 shortcutRow("Option+Command+=", "Increase speed")
@@ -281,8 +426,63 @@ struct ContentView: View {
     }
 
     private var appVersionText: String {
-        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.1"
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0.11"
         return "V\(version)"
+    }
+
+    private func loadScriptFromLink() async {
+        guard !isLoadingLink else { return }
+        isLoadingLink = true
+        loadLinkErrorMessage = nil
+        defer { isLoadingLink = false }
+
+        do {
+            model.pasteScript(try await ScriptLinkLoader.loadScript(from: linkInput), sourceLink: linkInput)
+            isLoadLinkSheetPresented = false
+        } catch {
+            loadLinkErrorMessage = error.localizedDescription
+        }
+    }
+}
+
+private struct LoadLinkSheet: View {
+    @Binding var linkInput: String
+    let isLoading: Bool
+    let errorMessage: String?
+    let onCancel: () -> Void
+    let onLoad: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Load from Link")
+                .font(.headline)
+            Text("Enter an article link to load clean text into Presentation Script.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+
+            TextField("https://example.com/article", text: $linkInput)
+                .textFieldStyle(.roundedBorder)
+
+            if let errorMessage {
+                Text(errorMessage)
+                    .font(.footnote)
+                    .foregroundStyle(.red)
+            }
+
+            HStack {
+                Spacer()
+                Button("Cancel") {
+                    onCancel()
+                }
+                Button("Load") {
+                    onLoad()
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(isLoading)
+            }
+        }
+        .padding(20)
+        .frame(width: 420)
     }
 }
 

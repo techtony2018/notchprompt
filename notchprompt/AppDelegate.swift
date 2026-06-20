@@ -46,7 +46,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
         setupEditMenu()
         wireModel()
-        setVoiceMonitorEnabled(model.autoPauseResumeWithLocalMic || model.autoAdjustSpeedToVoicePace)
+        setVoiceMonitorEnabled(model.autoPauseResumeWithLocalMic || model.transcriptBasedPrompt)
         hotkeyManager.registerAll()
         setupStatusBar()
         installEditKeyHandler()
@@ -92,7 +92,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             }
             .store(in: &cancellables)
 
-        Publishers.CombineLatest(model.$autoPauseResumeWithLocalMic, model.$autoAdjustSpeedToVoicePace)
+        Publishers.CombineLatest(
+            model.$autoPauseResumeWithLocalMic,
+            model.$transcriptBasedPrompt
+        )
             .map { $0 || $1 }
             .removeDuplicates()
             .receive(on: RunLoop.main)
@@ -109,6 +112,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             }
             .store(in: &cancellables)
 
+        model.$transcriptBasedPrompt
+            .removeDuplicates()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] shouldTrackTranscript in
+                guard let self, let voiceMonitor = self.voiceMonitor else { return }
+                voiceMonitor.transcriptTrackingEnabled = shouldTrackTranscript
+                if self.model.autoPauseResumeWithLocalMic || self.model.transcriptBasedPrompt {
+                    voiceMonitor.start()
+                }
+            }
+            .store(in: &cancellables)
+
         NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
@@ -119,30 +134,62 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             }
             .store(in: &cancellables)
 
-        Publishers.MergeMany(
+        let autosavePublishers: [AnyPublisher<Void, Never>] = [
             model.$script.map { _ in () }.eraseToAnyPublisher(),
+            model.$sourceLink.map { _ in () }.eraseToAnyPublisher(),
             model.$isRunning.map { _ in () }.eraseToAnyPublisher(),
             model.$privacyModeEnabled.map { _ in () }.eraseToAnyPublisher(),
             model.$clickContentTogglesPlayback.map { _ in () }.eraseToAnyPublisher(),
             model.$autoPauseResumeWithLocalMic.map { _ in () }.eraseToAnyPublisher(),
-            model.$autoAdjustSpeedToVoicePace.map { _ in () }.eraseToAnyPublisher(),
+            model.$transcriptBasedPrompt.map { _ in () }.eraseToAnyPublisher(),
+            model.$transcriptLanguageIdentifier.map { _ in () }.eraseToAnyPublisher(),
+            model.$transcriptMatchConsecutiveWords.map { _ in () }.eraseToAnyPublisher(),
+            model.$transcriptMaxForwardLookingWords.map { _ in () }.eraseToAnyPublisher(),
             model.$voiceDetectionThresholdDb.map { _ in () }.eraseToAnyPublisher(),
-            model.$speedPointsPerSecond.map { _ in () }.eraseToAnyPublisher(),
+            model.$secondsPerLine.map { _ in () }.eraseToAnyPublisher(),
             model.$fontSize.map { _ in () }.eraseToAnyPublisher(),
             model.$overlayWidth.map { _ in () }.eraseToAnyPublisher(),
             model.$overlayHeight.map { _ in () }.eraseToAnyPublisher(),
             model.$backgroundOpacity.map { _ in () }.eraseToAnyPublisher(),
-            model.$scrollingPaceSeconds.map { _ in () }.eraseToAnyPublisher(),
+            model.$scrollingPaceLines.map { _ in () }.eraseToAnyPublisher(),
             model.$countdownSeconds.map { _ in () }.eraseToAnyPublisher(),
             model.$countdownBehavior.map { _ in () }.eraseToAnyPublisher(),
             model.$scrollMode.map { _ in () }.eraseToAnyPublisher(),
             model.$selectedScreenID.map { _ in () }.eraseToAnyPublisher()
-        )
+        ]
+
+        Publishers.MergeMany(autosavePublishers)
         .debounce(for: .milliseconds(250), scheduler: RunLoop.main)
         .sink { [weak self] in
             self?.model.saveToDefaults()
         }
         .store(in: &cancellables)
+
+        model.$script
+            .receive(on: RunLoop.main)
+            .sink { [weak self] script in
+                self?.model.refreshDetectedTranscriptLanguage()
+                self?.model.resetTranscriptProgress()
+                self?.voiceMonitor?.scriptText = script
+                self?.voiceMonitor?.resetTranscriptState()
+            }
+            .store(in: &cancellables)
+
+        model.$resetToken
+            .dropFirst()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.voiceMonitor?.resetTranscriptState()
+            }
+            .store(in: &cancellables)
+
+        model.$transcriptLanguageIdentifier
+            .removeDuplicates()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] identifier in
+                self?.voiceMonitor?.preferredRecognitionLocaleIdentifier = identifier == "auto" ? nil : identifier
+            }
+            .store(in: &cancellables)
     }
 
     private func setVoiceMonitorEnabled(_ enabled: Bool) {
@@ -166,13 +213,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                 onSpeakingPaceChanged: { [weak self] wordsPerMinute in
                     self?.model.updateVoicePace(wordsPerMinute: wordsPerMinute)
                 },
+                onInputLevelChanged: { [weak self] db in
+                    self?.model.updateVoiceInputLevel(db: db)
+                },
+                onTranscriptChanged: { [weak self] transcript, wordsPerMinute in
+                    self?.model.updateTranscript(transcript, wordsPerMinute: wordsPerMinute)
+                },
                 onUnavailable: { [weak self] message in
                     self?.model.setVoiceMonitorUnavailable(message)
+                },
+                onTranscriptUnavailable: { [weak self] message in
+                    self?.model.setTranscriptUnavailable(message)
                 }
             )
         }
 
         voiceMonitor?.voiceDetectionThresholdDb = model.voiceDetectionThresholdDb
+        voiceMonitor?.transcriptTrackingEnabled = model.transcriptBasedPrompt
+        voiceMonitor?.preferredRecognitionLocaleIdentifier = model.transcriptLanguageIdentifier == "auto" ? nil : model.transcriptLanguageIdentifier
+        voiceMonitor?.scriptText = model.script
         voiceMonitor?.start()
     }
 
@@ -201,7 +260,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private func setupStatusBar() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         item.button?.title = "PC"
-        item.button?.toolTip = "PCompanion"
+        item.button?.toolTip = "Presentation Companion"
 
         let menu = NSMenu()
 
@@ -289,7 +348,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
         menu.addItem(.separator())
 
-        let quit = NSMenuItem(title: "Quit PCompanion", action: #selector(quitApp), keyEquivalent: "q")
+        let quit = NSMenuItem(title: "Quit Presentation Companion", action: #selector(quitApp), keyEquivalent: "q")
         quit.target = self
         quit.keyEquivalentModifierMask = [.command]
         menu.addItem(quit)
@@ -334,7 +393,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     @objc private func jumpBack() {
-        model.jumpBack(seconds: 5)
+        model.jumpBack()
     }
 
     @objc private func togglePrivacyMode() {
@@ -346,11 +405,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     @objc private func increaseSpeed() {
-        model.adjustSpeed(delta: PrompterModel.speedStep)
+        model.adjustSpeed(delta: PrompterModel.secondsPerLineStep)
     }
 
     @objc private func decreaseSpeed() {
-        model.adjustSpeed(delta: -PrompterModel.speedStep)
+        model.adjustSpeed(delta: -PrompterModel.secondsPerLineStep)
     }
 
     @objc private func openMainWindow() {
@@ -382,15 +441,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         case .reset:
             model.resetScroll()
         case .jumpBack:
-            model.jumpBack(seconds: 5)
+            model.jumpBack()
         case .togglePrivacy:
             model.privacyModeEnabled.toggle()
         case .toggleOverlay:
             model.isOverlayVisible.toggle()
         case .speedUp:
-            model.adjustSpeed(delta: PrompterModel.speedStep)
+            model.adjustSpeed(delta: PrompterModel.secondsPerLineStep)
         case .speedDown:
-            model.adjustSpeed(delta: -PrompterModel.speedStep)
+            model.adjustSpeed(delta: -PrompterModel.secondsPerLineStep)
         }
     }
 

@@ -20,13 +20,13 @@ final class SettingsWindowController: NSWindowController {
             backing: .buffered,
             defer: false
         )
-        window.title = "Notchprompt Settings"
+        window.title = "Presentation Companion Settings"
         window.contentViewController = hosting
         window.isReleasedWhenClosed = false
         window.minSize = NSSize(width: 620, height: 460)
         // Sit above the overlay panel (.screenSaver) so the notch never blocks this window.
         window.level = NSWindow.Level(Int(NSWindow.Level.screenSaver.rawValue) + 1)
-        window.setFrameAutosaveName("NotchpromptSettingsWindow")
+        window.setFrameAutosaveName("PresentationCompanionSettingsWindow")
         window.center()
 
         super.init(window: window)

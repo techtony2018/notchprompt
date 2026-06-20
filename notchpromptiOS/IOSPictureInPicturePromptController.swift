@@ -5,38 +5,44 @@
 
 import AVFoundation
 import AVKit
+import CoreMedia
+import os
 import SwiftUI
 import UIKit
+
+private let pipLogger = Logger(subsystem: "notch.presentation-companion", category: "PiP")
+
+private func pipLog(_ message: String) {
+    NSLog("Presentation Companion PiP: %@", message)
+    pipLogger.notice("\(message, privacy: .public)")
+}
 
 struct PictureInPicturePromptConfiguration: Equatable {
     var script: String
     var fontSize: CGFloat
-    var opacity: Double
     var scrollOffset: CGFloat
     var isRunning: Bool
+    var keepsSystemPlaybackActive: Bool
+    var voiceLevelDb: Float
+    var recognizedTranscript: String
+    var spokenCharacterEnd: Int
+    var isWaitingForVoiceStart: Bool
+    var recognitionLanguage: String
     var preferredContentSize: CGSize
-}
-
-enum PictureInPictureTapZone {
-    case left
-    case center
-    case right
 }
 
 struct PictureInPicturePromptActions {
     var togglePlayback: () -> Void
-    var toggleContentPlayback: () -> Void
+    var setPlayback: (Bool) -> Void
     var jumpBackward: (Int) -> Void
     var jumpForward: (Int) -> Void
-    var reset: () -> Void
     var openSettings: () -> Void
 
     static let empty = PictureInPicturePromptActions(
         togglePlayback: {},
-        toggleContentPlayback: {},
+        setPlayback: { _ in },
         jumpBackward: { _ in },
         jumpForward: { _ in },
-        reset: {},
         openSettings: {}
     )
 }
@@ -48,66 +54,96 @@ final class IOSPictureInPicturePromptController: NSObject, ObservableObject {
     @Published var statusMessage: String?
     var onDidStart: (() -> Void)?
     var onDidStop: (() -> Void)?
+    var onRestoreUserInterfaceRequested: (() -> Void)?
 
-    private let contentViewController = AVPictureInPictureVideoCallViewController()
-    private let promptView = PictureInPicturePromptView()
+    private let displayLayer = AVSampleBufferDisplayLayer()
     private var pictureInPictureController: AVPictureInPictureController?
     private weak var sourceView: UIView?
-    private var latestConfiguration: PictureInPicturePromptConfiguration?
+    private var latestConfiguration = PictureInPicturePromptConfiguration(
+        script: "",
+        fontSize: 30,
+        scrollOffset: 0,
+        isRunning: false,
+        keepsSystemPlaybackActive: false,
+        voiceLevelDb: -160,
+        recognizedTranscript: "",
+        spokenCharacterEnd: 0,
+        isWaitingForVoiceStart: false,
+        recognitionLanguage: "English",
+        preferredContentSize: CGSize(width: 420, height: 260)
+    )
+    private var actions = PictureInPicturePromptActions.empty
+    private var frameIndex: Int64 = 0
+    private var lastPlaybackState: Bool?
+    private var ignorePauseRequestUntil: Date?
 
     override init() {
         super.init()
-        contentViewController.preferredContentSize = CGSize(width: 420, height: 260)
-        contentViewController.view.backgroundColor = .clear
-        contentViewController.view.addSubview(promptView)
-        promptView.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            promptView.leadingAnchor.constraint(equalTo: contentViewController.view.leadingAnchor),
-            promptView.trailingAnchor.constraint(equalTo: contentViewController.view.trailingAnchor),
-            promptView.topAnchor.constraint(equalTo: contentViewController.view.topAnchor),
-            promptView.bottomAnchor.constraint(equalTo: contentViewController.view.bottomAnchor)
-        ])
+        displayLayer.videoGravity = .resizeAspect
+        displayLayer.backgroundColor = UIColor.black.cgColor
+        renderFrame()
     }
 
     func attach(to sourceView: UIView) {
         self.sourceView = sourceView
+        layoutDisplayLayer(in: sourceView)
         rebuildControllerIfNeeded()
     }
 
+    func layoutDisplayLayer(in sourceView: UIView) {
+        if displayLayer.superlayer !== sourceView.layer {
+            displayLayer.removeFromSuperlayer()
+            sourceView.layer.addSublayer(displayLayer)
+        }
+        displayLayer.frame = sourceView.bounds
+    }
+
     func update(configuration: PictureInPicturePromptConfiguration) {
+        let didChangePlaybackState = lastPlaybackState != configuration.isRunning
         latestConfiguration = configuration
-        contentViewController.preferredContentSize = configuration.preferredContentSize
-        promptView.update(configuration)
+        lastPlaybackState = configuration.isRunning
+        renderFrame()
+        if didChangePlaybackState {
+            pictureInPictureController?.invalidatePlaybackState()
+        }
     }
 
     func update(actions: PictureInPicturePromptActions) {
-        promptView.update(actions)
+        self.actions = actions
     }
 
     func showUnsupportedMessage() {
         statusMessage = "Picture in Picture is not available on this device."
     }
 
-    func start() {
+    @discardableResult
+    func start() -> Bool {
+        pipLog("sample start requested active=\(pictureInPictureController?.isPictureInPictureActive == true) possible=\(pictureInPictureController?.isPictureInPicturePossible == true)")
         guard isSupported else {
             showUnsupportedMessage()
-            return
+            return false
         }
 
         rebuildControllerIfNeeded()
+        renderFrame()
 
         guard let pictureInPictureController else {
             statusMessage = "Picture in Picture is not ready yet."
-            return
+            return false
         }
 
-        guard !pictureInPictureController.isPictureInPictureActive else { return }
+        guard !pictureInPictureController.isPictureInPictureActive else { return true }
+
+        configureAudioSession()
 
         if pictureInPictureController.isPictureInPicturePossible {
-            configureAudioSession()
+            pipLog("sample startPictureInPicture")
             pictureInPictureController.startPictureInPicture()
+            return true
         } else {
-            statusMessage = "Picture in Picture is not possible right now."
+            statusMessage = nil
+            pipLog("sample start rejected: PiP not possible")
+            return false
         }
     }
 
@@ -132,19 +168,25 @@ final class IOSPictureInPicturePromptController: NSObject, ObservableObject {
     }
 
     func stop() {
+        pipLog("sample stop requested")
+        pictureInPictureController?.stopPictureInPicture()
+    }
+
+    func stopAndRestoreUserInterface() {
+        pipLog("sample stopAndRestore requested")
         pictureInPictureController?.stopPictureInPicture()
     }
 
     private func rebuildControllerIfNeeded() {
-        guard pictureInPictureController == nil,
-              let sourceView else { return }
+        guard pictureInPictureController == nil else { return }
 
         let contentSource = AVPictureInPictureController.ContentSource(
-            activeVideoCallSourceView: sourceView,
-            contentViewController: contentViewController
+            sampleBufferDisplayLayer: displayLayer,
+            playbackDelegate: self
         )
         let controller = AVPictureInPictureController(contentSource: contentSource)
         controller.canStartPictureInPictureAutomaticallyFromInline = false
+        controller.requiresLinearPlayback = false
         controller.delegate = self
         pictureInPictureController = controller
     }
@@ -157,11 +199,261 @@ final class IOSPictureInPicturePromptController: NSObject, ObservableObject {
             statusMessage = "Picture in Picture audio session could not be prepared."
         }
     }
+
+    private func renderFrame() {
+        let pointSize = CGSize(
+            width: max(latestConfiguration.preferredContentSize.width, 240),
+            height: max(latestConfiguration.preferredContentSize.height, 140)
+        )
+        let scale = max(UIScreen.main.scale, 2)
+        let pixelWidth = max(Int(pointSize.width * scale), 1)
+        let pixelHeight = max(Int(pointSize.height * scale), 1)
+
+        guard let pixelBuffer = makePixelBuffer(width: pixelWidth, height: pixelHeight) else { return }
+
+        CVPixelBufferLockBaseAddress(pixelBuffer, [])
+        defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, []) }
+
+        guard let baseAddress = CVPixelBufferGetBaseAddress(pixelBuffer),
+              let context = CGContext(
+                data: baseAddress,
+                width: pixelWidth,
+                height: pixelHeight,
+                bitsPerComponent: 8,
+                bytesPerRow: CVPixelBufferGetBytesPerRow(pixelBuffer),
+                space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
+              ) else { return }
+
+        context.translateBy(x: CGFloat(pixelWidth), y: CGFloat(pixelHeight))
+        context.rotate(by: .pi)
+        context.scaleBy(x: scale, y: scale)
+        context.translateBy(x: pointSize.width, y: 0)
+        context.scaleBy(x: -1, y: 1)
+        drawPrompt(in: context, size: pointSize)
+        enqueue(pixelBuffer: pixelBuffer)
+    }
+
+    private func makePixelBuffer(width: Int, height: Int) -> CVPixelBuffer? {
+        let attributes: [CFString: Any] = [
+            kCVPixelBufferCGImageCompatibilityKey: true,
+            kCVPixelBufferCGBitmapContextCompatibilityKey: true,
+            kCVPixelBufferIOSurfacePropertiesKey: [:]
+        ]
+        var pixelBuffer: CVPixelBuffer?
+        let status = CVPixelBufferCreate(
+            kCFAllocatorDefault,
+            width,
+            height,
+            kCVPixelFormatType_32BGRA,
+            attributes as CFDictionary,
+            &pixelBuffer
+        )
+        guard status == kCVReturnSuccess else { return nil }
+        return pixelBuffer
+    }
+
+    private func drawPrompt(in context: CGContext, size: CGSize) {
+        UIGraphicsPushContext(context)
+        defer { UIGraphicsPopContext() }
+
+        let bounds = CGRect(origin: .zero, size: size)
+        context.clear(bounds)
+        UIColor.black.setFill()
+        UIRectFill(bounds)
+
+        let topBarHeight: CGFloat = 48
+        UIColor(white: 1, alpha: 0.12).setFill()
+        UIRectFill(CGRect(x: 0, y: 0, width: size.width, height: topBarHeight))
+
+        let titleAttributes: [NSAttributedString.Key: Any] = [
+            .font: UIFont.systemFont(ofSize: 14, weight: .semibold),
+            .foregroundColor: UIColor.white
+        ]
+        let status = latestConfiguration.isRunning ? "Playing" : "Paused"
+        NSString(string: "Presentation Companion - \(status)").draw(
+            in: CGRect(x: 14, y: 13, width: size.width * 0.44, height: 22),
+            withAttributes: titleAttributes
+        )
+
+        voiceStatusText().draw(
+            in: CGRect(x: size.width * 0.44, y: 8, width: size.width * 0.52, height: 18)
+        )
+
+        languageStatusText().draw(
+            in: CGRect(x: size.width * 0.44, y: 25, width: size.width * 0.52, height: 17)
+        )
+
+        let bottomStatusHeight: CGFloat = 22
+        let promptRect = CGRect(
+            x: 16,
+            y: topBarHeight + 8,
+            width: size.width - 32,
+            height: size.height - topBarHeight - 14 - bottomStatusHeight
+        )
+        context.saveGState()
+        context.clip(to: promptRect)
+        if latestConfiguration.isWaitingForVoiceStart {
+            drawVoiceStartTip(in: promptRect)
+        }
+        let promptAttributes: [NSAttributedString.Key: Any] = [
+            .font: UIFont.roundedSystemFont(ofSize: max(latestConfiguration.fontSize * 0.78, 17), weight: .regular),
+            .foregroundColor: UIColor.white,
+            .paragraphStyle: paragraphStyle(lineSpacing: 5)
+        ]
+        attributedPromptString(attributes: promptAttributes).draw(
+            in: CGRect(
+                x: promptRect.minX,
+                y: promptRect.minY + (latestConfiguration.isWaitingForVoiceStart ? 42 : 0) - latestConfiguration.scrollOffset,
+                width: promptRect.width,
+                height: 20_000
+            )
+        )
+        context.restoreGState()
+
+        if !latestConfiguration.recognizedTranscript.isEmpty {
+            drawRecognizedTranscript(in: CGRect(
+                x: 16,
+                y: size.height - bottomStatusHeight - 2,
+                width: size.width - 32,
+                height: bottomStatusHeight
+            ))
+        }
+    }
+
+    private func voiceStatusText() -> NSAttributedString {
+        let base = NSMutableAttributedString(
+            string: "Voice Detected: ",
+            attributes: [
+                .font: UIFont.systemFont(ofSize: 11, weight: .medium),
+                .foregroundColor: UIColor.white.withAlphaComponent(0.72)
+            ]
+        )
+        let levelText: String
+        if latestConfiguration.voiceLevelDb <= -150 {
+            levelText = "-- dB"
+        } else {
+            levelText = "\(Int(latestConfiguration.voiceLevelDb.rounded())) dB"
+        }
+        base.append(
+            NSAttributedString(
+                string: levelText,
+                attributes: [
+                    .font: UIFont.systemFont(ofSize: 11, weight: .bold),
+                    .foregroundColor: UIColor.systemRed
+                ]
+            )
+        )
+        return base
+    }
+
+    private func languageStatusText() -> NSAttributedString {
+        NSAttributedString(
+            string: latestConfiguration.recognitionLanguage,
+            attributes: [
+                .font: UIFont.systemFont(ofSize: 10, weight: .semibold),
+                .foregroundColor: UIColor.systemBlue
+            ]
+        )
+    }
+
+    private func attributedPromptString(attributes: [NSAttributedString.Key: Any]) -> NSAttributedString {
+        let attributed = NSMutableAttributedString(string: latestConfiguration.script, attributes: attributes)
+        let length = (latestConfiguration.script as NSString).length
+        let spokenEnd = min(max(latestConfiguration.spokenCharacterEnd, 0), length)
+        if spokenEnd > 0 {
+            attributed.addAttribute(.foregroundColor, value: UIColor.systemBlue, range: NSRange(location: 0, length: spokenEnd))
+        }
+        return attributed
+    }
+
+    private func drawVoiceStartTip(in promptRect: CGRect) {
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: UIFont.systemFont(ofSize: 17, weight: .semibold),
+            .foregroundColor: UIColor.white.withAlphaComponent(0.88)
+        ]
+        NSString(string: "Start talking to move prompt forward").draw(
+            in: CGRect(
+                x: promptRect.minX,
+                y: promptRect.minY + 8,
+                width: promptRect.width,
+                height: 28
+            ),
+            withAttributes: attributes
+        )
+    }
+
+    private func drawRecognizedTranscript(in rect: CGRect) {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = .center
+        paragraph.lineBreakMode = .byTruncatingTail
+        NSAttributedString(
+            string: latestConfiguration.recognizedTranscript,
+            attributes: [
+                .font: UIFont.systemFont(ofSize: 12, weight: .medium),
+                .foregroundColor: UIColor.systemBlue,
+                .paragraphStyle: paragraph
+            ]
+        ).draw(in: rect)
+    }
+
+    private func paragraphStyle(lineSpacing: CGFloat) -> NSParagraphStyle {
+        let style = NSMutableParagraphStyle()
+        style.lineSpacing = lineSpacing
+        style.alignment = .left
+        return style
+    }
+
+    private func enqueue(pixelBuffer: CVPixelBuffer) {
+        if displayLayer.status == .failed {
+            displayLayer.flush()
+        }
+
+        var formatDescription: CMVideoFormatDescription?
+        guard CMVideoFormatDescriptionCreateForImageBuffer(
+            allocator: kCFAllocatorDefault,
+            imageBuffer: pixelBuffer,
+            formatDescriptionOut: &formatDescription
+        ) == noErr,
+              let formatDescription else { return }
+
+        let timestamp = CMTime(value: frameIndex, timescale: 30)
+        frameIndex += 1
+
+        var timing = CMSampleTimingInfo(
+            duration: CMTime(value: 1, timescale: 30),
+            presentationTimeStamp: timestamp,
+            decodeTimeStamp: .invalid
+        )
+        var sampleBuffer: CMSampleBuffer?
+        guard CMSampleBufferCreateReadyWithImageBuffer(
+            allocator: kCFAllocatorDefault,
+            imageBuffer: pixelBuffer,
+            formatDescription: formatDescription,
+            sampleTiming: &timing,
+            sampleBufferOut: &sampleBuffer
+        ) == noErr,
+              let sampleBuffer else { return }
+
+        if let attachments = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: true) {
+            let attachment = unsafeBitCast(CFArrayGetValueAtIndex(attachments, 0), to: CFMutableDictionary.self)
+            CFDictionarySetValue(
+                attachment,
+                Unmanaged.passUnretained(kCMSampleAttachmentKey_DisplayImmediately).toOpaque(),
+                Unmanaged.passUnretained(kCFBooleanTrue).toOpaque()
+            )
+        }
+
+        if displayLayer.isReadyForMoreMediaData {
+            displayLayer.enqueue(sampleBuffer)
+        }
+    }
 }
 
 extension IOSPictureInPicturePromptController: AVPictureInPictureControllerDelegate {
     nonisolated func pictureInPictureControllerWillStartPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {
         Task { @MainActor in
+            pipLog("sample delegate willStart")
             self.statusMessage = nil
             self.isActive = true
             self.onDidStart?()
@@ -170,6 +462,7 @@ extension IOSPictureInPicturePromptController: AVPictureInPictureControllerDeleg
 
     nonisolated func pictureInPictureControllerDidStopPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {
         Task { @MainActor in
+            pipLog("sample delegate didStop")
             self.isActive = false
             self.onDidStop?()
         }
@@ -180,8 +473,95 @@ extension IOSPictureInPicturePromptController: AVPictureInPictureControllerDeleg
         failedToStartPictureInPictureWithError error: Error
     ) {
         Task { @MainActor in
+            pipLog("sample delegate failedToStart: \(error.localizedDescription)")
             self.isActive = false
             self.statusMessage = error.localizedDescription
+        }
+    }
+
+    nonisolated func pictureInPictureController(
+        _ pictureInPictureController: AVPictureInPictureController,
+        restoreUserInterfaceForPictureInPictureStopWithCompletionHandler completionHandler: @escaping (Bool) -> Void
+    ) {
+        Task { @MainActor in
+            pipLog("sample delegate restoreUI -> settings")
+            self.onRestoreUserInterfaceRequested?()
+            completionHandler(true)
+        }
+    }
+}
+
+extension IOSPictureInPicturePromptController: AVPictureInPictureSampleBufferPlaybackDelegate {
+    nonisolated func pictureInPictureController(
+        _ pictureInPictureController: AVPictureInPictureController,
+        setPlaying playing: Bool
+    ) {
+        Task { @MainActor in
+            pipLog("sample PiP setPlaying=\(playing)")
+            if !playing,
+               let ignorePauseRequestUntil,
+               Date() < ignorePauseRequestUntil {
+                pipLog("sample PiP ignored pause immediately after skip")
+                self.pictureInPictureController?.invalidatePlaybackState()
+                self.renderFrame()
+                return
+            }
+
+            ignorePauseRequestUntil = nil
+            self.actions.setPlayback(playing)
+            self.pictureInPictureController?.invalidatePlaybackState()
+            self.renderFrame()
+        }
+    }
+
+    nonisolated func pictureInPictureControllerTimeRangeForPlayback(
+        _ pictureInPictureController: AVPictureInPictureController
+    ) -> CMTimeRange {
+        CMTimeRange(
+            start: .zero,
+            duration: CMTime(seconds: 24 * 60 * 60, preferredTimescale: 600)
+        )
+    }
+
+    nonisolated func pictureInPictureControllerIsPlaybackPaused(
+        _ pictureInPictureController: AVPictureInPictureController
+    ) -> Bool {
+        MainActor.assumeIsolated {
+            !latestConfiguration.isRunning && !latestConfiguration.keepsSystemPlaybackActive
+        }
+    }
+
+    nonisolated func pictureInPictureController(
+        _ pictureInPictureController: AVPictureInPictureController,
+        didTransitionToRenderSize newRenderSize: CMVideoDimensions
+    ) {
+        Task { @MainActor in
+            pipLog("sample PiP render size \(newRenderSize.width)x\(newRenderSize.height)")
+            self.renderFrame()
+        }
+    }
+
+    nonisolated func pictureInPictureController(
+        _ pictureInPictureController: AVPictureInPictureController,
+        skipByInterval skipInterval: CMTime,
+        completion completionHandler: @escaping () -> Void
+    ) {
+        Task { @MainActor in
+            let seconds = skipInterval.seconds
+            pipLog("sample PiP skip seconds=\(seconds)")
+            let shouldResumeAfterSkip = self.latestConfiguration.isRunning
+            if seconds < 0 {
+                self.actions.jumpBackward(1)
+            } else {
+                self.actions.jumpForward(1)
+            }
+            if shouldResumeAfterSkip {
+                self.ignorePauseRequestUntil = Date().addingTimeInterval(0.75)
+                self.actions.setPlayback(true)
+            }
+            self.pictureInPictureController?.invalidatePlaybackState()
+            self.renderFrame()
+            completionHandler()
         }
     }
 }
@@ -191,180 +571,31 @@ struct PictureInPictureSourceView: UIViewRepresentable {
     let configuration: PictureInPicturePromptConfiguration
     let actions: PictureInPicturePromptActions
 
-    func makeUIView(context: Context) -> UIView {
-        let view = UIView()
+    func makeUIView(context: Context) -> SourceUIView {
+        let view = SourceUIView()
         view.backgroundColor = .black
         view.alpha = 0.01
         view.isUserInteractionEnabled = false
+        view.controller = controller
         controller.attach(to: view)
         controller.update(configuration: configuration)
         controller.update(actions: actions)
         return view
     }
 
-    func updateUIView(_ uiView: UIView, context: Context) {
+    func updateUIView(_ uiView: SourceUIView, context: Context) {
+        uiView.controller = controller
         controller.attach(to: uiView)
         controller.update(configuration: configuration)
         controller.update(actions: actions)
     }
-}
 
-private final class PictureInPicturePromptView: UIView {
-    private let label = UILabel()
-    private let statusLabel = UILabel()
-    private let controlStack = UIStackView()
-    private let playPauseButton = UIButton(type: .system)
-    private var actions = PictureInPicturePromptActions.empty
-    private var offsetConstraint: NSLayoutConstraint?
+    final class SourceUIView: UIView {
+        weak var controller: IOSPictureInPicturePromptController?
 
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        backgroundColor = .black
-        clipsToBounds = true
-        layer.cornerCurve = .continuous
-        layer.cornerRadius = 14
-
-        label.numberOfLines = 0
-        label.textColor = .white
-        label.translatesAutoresizingMaskIntoConstraints = false
-
-        statusLabel.textColor = UIColor.white.withAlphaComponent(0.72)
-        statusLabel.font = .systemFont(ofSize: 13, weight: .semibold)
-        statusLabel.translatesAutoresizingMaskIntoConstraints = false
-
-        controlStack.axis = .horizontal
-        controlStack.alignment = .center
-        controlStack.spacing = 6
-        controlStack.translatesAutoresizingMaskIntoConstraints = false
-
-        addSubview(label)
-        addSubview(statusLabel)
-        addSubview(controlStack)
-
-        configureControls()
-
-        let tapRecognizer = UITapGestureRecognizer(target: self, action: #selector(handleContentTap(_:)))
-        tapRecognizer.numberOfTapsRequired = 1
-        tapRecognizer.cancelsTouchesInView = false
-        addGestureRecognizer(tapRecognizer)
-
-        let doubleTapRecognizer = UITapGestureRecognizer(target: self, action: #selector(handleContentTap(_:)))
-        doubleTapRecognizer.numberOfTapsRequired = 2
-        doubleTapRecognizer.cancelsTouchesInView = false
-        addGestureRecognizer(doubleTapRecognizer)
-        tapRecognizer.require(toFail: doubleTapRecognizer)
-
-        let offsetConstraint = label.topAnchor.constraint(equalTo: topAnchor, constant: 58)
-        self.offsetConstraint = offsetConstraint
-
-        NSLayoutConstraint.activate([
-            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 18),
-            label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -18),
-            offsetConstraint,
-
-            statusLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
-            statusLabel.trailingAnchor.constraint(lessThanOrEqualTo: controlStack.leadingAnchor, constant: -8),
-            statusLabel.centerYAnchor.constraint(equalTo: controlStack.centerYAnchor),
-
-            controlStack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
-            controlStack.topAnchor.constraint(equalTo: topAnchor, constant: 10),
-            controlStack.heightAnchor.constraint(equalToConstant: 34)
-        ])
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) {
-        nil
-    }
-
-    func update(_ configuration: PictureInPicturePromptConfiguration) {
-        backgroundColor = UIColor.black.withAlphaComponent(configuration.opacity)
-        label.text = configuration.script
-        label.font = .roundedSystemFont(ofSize: max(configuration.fontSize * 0.82, 18), weight: .regular)
-        statusLabel.text = configuration.isRunning ? "PCompanion - Playing" : "PCompanion - Paused"
-        playPauseButton.setImage(UIImage(systemName: configuration.isRunning ? "pause.fill" : "play.fill"), for: .normal)
-        playPauseButton.accessibilityLabel = configuration.isRunning ? "Pause" : "Play"
-        offsetConstraint?.constant = 58 - configuration.scrollOffset
-        setNeedsLayout()
-    }
-
-    func update(_ actions: PictureInPicturePromptActions) {
-        self.actions = actions
-    }
-
-    private func configureControls() {
-        styleControlButton(playPauseButton, systemName: "play.fill")
-
-        let buttons: [(UIButton, String, Selector, String)] = [
-            (makeControlButton(systemName: "arrow.counterclockwise"), "Reset", #selector(resetTapped), "Reset"),
-            (makeControlButton(systemName: "gobackward"), "Back", #selector(backTapped), "Back"),
-            (playPauseButton, "Play", #selector(playPauseTapped), "Play"),
-            (makeControlButton(systemName: "goforward"), "Forward", #selector(forwardTapped), "Forward"),
-            (makeControlButton(systemName: "gearshape.fill"), "Settings", #selector(settingsTapped), "Settings")
-        ]
-
-        for (button, label, selector, identifier) in buttons {
-            button.accessibilityLabel = label
-            button.accessibilityIdentifier = "pip\(identifier)Button"
-            button.addTarget(self, action: selector, for: .touchUpInside)
-            controlStack.addArrangedSubview(button)
-        }
-    }
-
-    private func makeControlButton(systemName: String) -> UIButton {
-        let button = UIButton(type: .system)
-        styleControlButton(button, systemName: systemName)
-        return button
-    }
-
-    private func styleControlButton(_ button: UIButton, systemName: String) {
-        var configuration = UIButton.Configuration.plain()
-        configuration.image = UIImage(systemName: systemName)
-        configuration.baseForegroundColor = .white
-        configuration.contentInsets = NSDirectionalEdgeInsets(top: 4, leading: 4, bottom: 4, trailing: 4)
-
-        button.configuration = configuration
-        button.backgroundColor = UIColor.white.withAlphaComponent(0.14)
-        button.layer.cornerCurve = .continuous
-        button.layer.cornerRadius = 13
-        button.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            button.widthAnchor.constraint(equalToConstant: 28),
-            button.heightAnchor.constraint(equalToConstant: 28)
-        ])
-    }
-
-    @objc private func playPauseTapped() {
-        actions.togglePlayback()
-    }
-
-    @objc private func backTapped() {
-        actions.jumpBackward(1)
-    }
-
-    @objc private func forwardTapped() {
-        actions.jumpForward(1)
-    }
-
-    @objc private func resetTapped() {
-        actions.reset()
-    }
-
-    @objc private func settingsTapped() {
-        actions.openSettings()
-    }
-
-    @objc private func handleContentTap(_ recognizer: UITapGestureRecognizer) {
-        let point = recognizer.location(in: self)
-        guard point.y > 52 else { return }
-
-        let tapCount = recognizer.numberOfTapsRequired
-        if point.x < bounds.width / 3 {
-            actions.jumpBackward(tapCount)
-        } else if point.x > bounds.width * 2 / 3 {
-            actions.jumpForward(tapCount)
-        } else {
-            actions.toggleContentPlayback()
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            controller?.layoutDisplayLayer(in: self)
         }
     }
 }

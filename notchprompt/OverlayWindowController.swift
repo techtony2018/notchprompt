@@ -95,7 +95,7 @@ final class OverlayWindowController: NSObject {
             defer: false
         )
         panel.isReleasedWhenClosed = false
-        panel.level = .floating
+        panel.level = Self.overlayLevel
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
         panel.hidesOnDeactivate = false
         // panel.isFloatingPanel = true // This overrides level to .floating (3)
@@ -128,7 +128,7 @@ final class OverlayWindowController: NSObject {
 #endif
         if isVisible {
             reposition()
-            panel.level = .floating
+            panel.level = Self.overlayLevel
             panel.alphaValue = 1.0
             panel.orderFrontRegardless()
         } else {
@@ -179,7 +179,7 @@ final class OverlayWindowController: NSObject {
         isApplyingFrame = false
         lastFrame = targetFrame
         
-        panel.level = .floating
+        panel.level = Self.overlayLevel
         panel.alphaValue = 1.0
 
 #if DEBUG
@@ -237,6 +237,10 @@ final class OverlayWindowController: NSObject {
         }
 
         return screens.first(where: { displayID(for: $0) == targetID })
+    }
+
+    private static var overlayLevel: NSWindow.Level {
+        .screenSaver
     }
 
     private func displayID(for screen: NSScreen) -> CGDirectDisplayID? {

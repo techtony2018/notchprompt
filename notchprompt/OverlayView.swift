@@ -121,7 +121,7 @@ struct OverlayView: View {
             ScrollingTextView(
                 text: model.script,
                 fontSize: CGFloat(model.fontSize),
-                speedPointsPerSecond: model.speedPointsPerSecond,
+                secondsPerLine: model.secondsPerLine,
                 isRunning: model.isRunning,
                 hasStartedSession: model.hasStartedSession,
                 resetToken: model.resetToken,
@@ -129,6 +129,11 @@ struct OverlayView: View {
                 jumpBackDistancePoints: model.jumpBackDistancePoints,
                 manualScrollToken: model.manualScrollToken,
                 manualScrollDeltaPoints: model.manualScrollDeltaPoints,
+                transcriptProgressToken: model.transcriptProgressToken,
+                transcriptProgressFraction: model.transcriptProgressFraction,
+                transcriptSpokenCharacterEnd: model.transcriptBasedPrompt ? model.transcriptSpokenCharacterEnd : 0,
+                transcriptProgressAllowsBackward: model.transcriptBasedPrompt,
+                transcriptDrivenScrolling: model.transcriptBasedPrompt,
                 fadeFraction: CGFloat(model.edgeFadeFraction),
                 backgroundOpacity: model.backgroundOpacity,
                 isHovering: false,
@@ -137,6 +142,9 @@ struct OverlayView: View {
                 onSaveScrollPhaseForResume: { phase in
                     model.saveScrollPhaseForResume(phase)
                 },
+                onVisibleUTF16RangeChanged: { range in
+                    model.updateTranscriptVisibleUTF16Range(range)
+                },
                 onReachedEnd: {
                     if model.isRunning {
                         model.markReachedEndInStopMode()
@@ -144,8 +152,8 @@ struct OverlayView: View {
                 }
             )
             .padding(.horizontal, 18)
-            .padding(.top, 58)
-            .padding(.bottom, 16)
+            .padding(.top, 40)
+            .padding(.bottom, 44)
             .clipShape(Rectangle())
             .overlay {
                 TrackpadScrollCaptureView(
@@ -157,7 +165,11 @@ struct OverlayView: View {
                     }
                 )
             }
-            
+
+            if shouldShowBottomStatusLine {
+                bottomStatusLine
+            }
+
             if !model.isCountingDown {
                 HStack {
                     HStack(spacing: 6) {
@@ -170,11 +182,19 @@ struct OverlayView: View {
                         }
                         
                         OverlayControlButton(
-                            symbol: "gobackward.5",
-                            tooltip: "Jump back \(Int(model.scrollingPaceSeconds)) seconds",
+                            symbol: "arrow.counterclockwise",
+                            tooltip: "Reset to fresh start",
                             onTooltipChange: setTooltip
                         ) {
-                            model.jumpBack(seconds: model.scrollingPaceSeconds)
+                            model.resetToFreshStart()
+                        }
+
+                        OverlayControlButton(
+                            symbol: "gearshape",
+                            tooltip: "Open settings",
+                            onTooltipChange: setTooltip
+                        ) {
+                            NSApp.sendAction(NSSelectorFromString("openMainWindow"), to: nil, from: nil)
                         }
                     }
                     .padding(.horizontal, 8)
@@ -207,16 +227,8 @@ struct OverlayView: View {
                         }
 
                         OverlayControlButton(
-                            symbol: "gearshape",
-                            tooltip: "Open settings",
-                            onTooltipChange: setTooltip
-                        ) {
-                            NSApp.sendAction(NSSelectorFromString("openMainWindow"), to: nil, from: nil)
-                        }
-
-                        OverlayControlButton(
                             symbol: "xmark",
-                            tooltip: "Quit PCompanion",
+                            tooltip: "Quit Presentation Companion",
                             onTooltipChange: setTooltip
                         ) {
                             NSApp.terminate(nil)
@@ -275,6 +287,74 @@ struct OverlayView: View {
         tooltipText = text
     }
 
+    private var shouldShowBottomStatusLine: Bool {
+        model.autoPauseResumeWithLocalMic || model.transcriptBasedPrompt || !model.recognizedTranscriptDisplayLine.isEmpty
+    }
+
+    private var bottomStatusLine: some View {
+        VStack {
+            Spacer()
+            HStack(spacing: 10) {
+                statusLeadingLabel
+                    .frame(width: 150, alignment: .leading)
+
+                if model.transcriptBasedPrompt {
+                    Text(model.recognizedTranscriptDisplayLine)
+                        .font(.system(size: max(11, model.fontSize * 0.58), weight: .medium))
+                        .foregroundStyle(.blue)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                } else {
+                    Spacer(minLength: 0)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 5)
+            .background(Color.black.opacity(0.52), in: Capsule())
+            .padding(.horizontal, 18)
+            .padding(.bottom, 8)
+        }
+    }
+
+    @ViewBuilder
+    private var statusLeadingLabel: some View {
+        if model.autoPauseResumeWithLocalMic {
+            HStack(spacing: 3) {
+                Text("Voice:")
+                    .foregroundStyle(.white.opacity(0.72))
+                Text("\(Int(model.voiceInputLevelDb.rounded())) dB")
+                    .foregroundStyle(.red)
+            }
+            .font(.system(size: 10, weight: .semibold))
+            .monospacedDigit()
+            .lineLimit(1)
+        } else if model.transcriptBasedPrompt {
+            Menu {
+                Picker("Speech recognition language", selection: $model.transcriptLanguageIdentifier) {
+                    Text("Auto (\(model.detectedTranscriptLanguageLabel))").tag("auto")
+                    ForEach(PrompterModel.transcriptLanguageOptions.filter { $0.id != "auto" }) { option in
+                        Text(option.label).tag(option.id)
+                    }
+                }
+            } label: {
+                Text(model.effectiveTranscriptLanguageLabel)
+                    .foregroundStyle(.blue)
+                    .overlay(alignment: .trailing) {
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 8, weight: .bold))
+                            .foregroundStyle(.white.opacity(0.58))
+                            .padding(.trailing, 2)
+                    }
+                    .font(.system(size: 10, weight: .semibold))
+                    .lineLimit(1)
+            }
+            .menuStyle(.borderlessButton)
+        } else {
+            EmptyView()
+        }
+    }
+
     private var resizeHandle: some View {
         VStack {
             Spacer(minLength: 0)
@@ -296,7 +376,7 @@ struct OverlayView: View {
                                 let targetWidth = startSize.width + value.translation.width
                                 let targetHeight = startSize.height + value.translation.height
                                 model.overlayWidth = min(max(Double(targetWidth), 400), 1200)
-                                model.overlayHeight = min(max(Double(targetHeight), 120), 300)
+                                model.overlayHeight = min(max(Double(targetHeight), PrompterModel.overlayHeightRange.lowerBound), model.maximumOverlayHeight())
                             }
                             .onEnded { _ in
                                 resizeStartSize = nil

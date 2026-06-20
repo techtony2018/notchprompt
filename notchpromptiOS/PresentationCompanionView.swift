@@ -4,7 +4,16 @@
 //
 
 import SwiftUI
+import Darwin
+import os
 import UIKit
+
+private let presentationLogger = Logger(subsystem: "notch.presentation-companion", category: "Presentation")
+
+private func presentationLog(_ message: String) {
+    NSLog("Presentation Companion: %@", message)
+    presentationLogger.notice("\(message, privacy: .public)")
+}
 
 private enum IOSScrollMode: String, CaseIterable {
     case infinite
@@ -28,15 +37,15 @@ private enum IOSCountdownBehavior: String, CaseIterable {
     }
 }
 
-struct PresentationCompanionView: View {
-    @StateObject private var voiceMonitor = IOSLocalMicrophoneVoiceMonitor()
-    @StateObject private var pictureInPictureController = IOSPictureInPicturePromptController()
-    @State private var script = """
-PCompanion helps you rehearse without losing your place.
+private struct IOSTranscriptLanguageOption: Identifiable, Hashable {
+    let id: String
+    let label: String
+}
 
-Tap the center of the prompt to start, pause, or resume.
-Tap the left third to move back.
-Tap the right third to move forward.
+private enum PresentationCompanionDefaults {
+    static let script = """
+Presentation Companion helps you rehearse without losing your place.
+
 Open settings from the gear button when you want to edit this script.
 
 This sample text is intentionally long enough to scroll on a phone.
@@ -64,230 +73,233 @@ Close:
 The goal is simple: fewer distractions, better flow, and a calmer delivery.
 Thank you.
 """
+}
+
+struct PresentationCompanionView: View {
+    @Environment(\.scenePhase) private var scenePhase
+    @StateObject private var voiceMonitor = IOSLocalMicrophoneVoiceMonitor()
+    @AppStorage("ios.script") private var script = PresentationCompanionDefaults.script
+    @AppStorage("ios.sourceLink") private var sourceLink = ""
     @State private var isRunning = false
-    @State private var speed: Double = 70
-    @State private var fontSize: Double = 30
-    @State private var opacity: Double = 1
-    @State private var paceSeconds: Double = 5
+    @AppStorage("ios.secondsPerLine") private var secondsPerLine: Double = 5
+    @AppStorage("ios.fontSize") private var fontSize: Double = 30
+    @AppStorage("ios.paceLines") private var paceLines: Double = 2
     @State private var scrollOffset: CGFloat = 0
+    @State private var dragStartScrollOffset: CGFloat?
     @State private var viewportHeight: CGFloat = 1
     @State private var contentHeight: CGFloat = 1
     @State private var lastTickDate: Date?
     @State private var isSettingsPresented = false
-    @State private var clickContentTogglesPlayback = true
-    @State private var scrollMode: IOSScrollMode = .infinite
-    @State private var countdownBehavior: IOSCountdownBehavior = .freshStartOnly
-    @State private var countdownSeconds = 3
+    @AppStorage("ios.scrollMode") private var scrollModeRaw = IOSScrollMode.infinite.rawValue
+    @AppStorage("ios.countdownBehavior") private var countdownBehaviorRaw = IOSCountdownBehavior.freshStartOnly.rawValue
+    @AppStorage("ios.countdownSeconds") private var countdownSeconds = 3
     @State private var isCountingDown = false
     @State private var countdownRemaining = 0
     @State private var shouldUseCountdownOnNextStart = true
-    @State private var promptWidthFraction: CGFloat = 0.92
-    @State private var promptHeightFraction: CGFloat = 0.72
-    @State private var pipWidth: Double = 420
-    @State private var pipHeight: Double = 260
-    @State private var resizeStartFractions: CGSize?
-    @State private var autoPauseResumeWithLocalMic = false
-    @State private var autoAdjustSpeedToVoicePace = false
-    @State private var voiceDetectionThresholdDb = 5.0
+    @AppStorage("ios.scriptEditorHeight") private var scriptEditorHeight: Double = 220
+    @State private var scriptEditorResizeStartHeight: Double?
+    @AppStorage("ios.autoPauseResumeWithLocalMic") private var autoPauseResumeWithLocalMic = false
+    @AppStorage("ios.transcriptBasedPrompt") private var transcriptBasedPrompt = false
+    @AppStorage("ios.transcriptLanguageIdentifier") private var transcriptLanguageIdentifier = "auto"
+    @AppStorage("ios.transcriptMatchConsecutiveWords") private var transcriptMatchConsecutiveWords = 3
+    @AppStorage("ios.transcriptMaxForwardLookingWords") private var transcriptMaxForwardLookingWords = 20
+    @State private var detectedTranscriptLanguageIdentifier = "en-US"
+    @AppStorage("ios.voiceDetectionThresholdDb") private var voiceDetectionThresholdDb = -30.0
     @State private var isPausedByVoiceMonitor = false
     @State private var isVoiceResumeBlockedByManualPause = false
+    @State private var isWaitingForVoiceStart = false
+    @State private var transcriptSpokenCharacterEnd = 0
+    @State private var transcriptMatchedTokenIndex = -1
+    @State private var transcriptConsumedTokenCount = 0
+    @State private var transcriptVisibleUTF16Range: Range<Int> = 0..<Int.max
+    @State private var previousRecognizedTranscript = ""
+    @State private var recognizedTranscriptDisplayLine = ""
     @State private var countdownTask: Task<Void, Never>?
-    @State private var shouldHideAppWhenPictureInPictureStarts = false
-    @State private var isReturningToSettings = false
+    @State private var isPresentationModeActive = false
+    @State private var shouldShowSettingsSurface = true
+    @State private var promptTextWidth: CGFloat = 1
+    @State private var linkInput = ""
+    @State private var isLoadLinkPresented = false
+    @State private var isLoadingLink = false
+    @State private var loadLinkErrorMessage: String?
     @FocusState private var isScriptFocused: Bool
 
     private let timer = Timer.publish(every: 1.0 / 60.0, on: .main, in: .common).autoconnect()
+    private let transcriptLanguageOptions: [IOSTranscriptLanguageOption] = [
+        IOSTranscriptLanguageOption(id: "auto", label: "Auto"),
+        IOSTranscriptLanguageOption(id: "en-US", label: "English"),
+        IOSTranscriptLanguageOption(id: "zh-Hans", label: "Chinese (Simplified)"),
+        IOSTranscriptLanguageOption(id: "zh-Hant", label: "Chinese (Traditional)"),
+        IOSTranscriptLanguageOption(id: "ja-JP", label: "Japanese"),
+        IOSTranscriptLanguageOption(id: "ko-KR", label: "Korean"),
+        IOSTranscriptLanguageOption(id: "es-ES", label: "Spanish"),
+        IOSTranscriptLanguageOption(id: "fr-FR", label: "French"),
+        IOSTranscriptLanguageOption(id: "de-DE", label: "German"),
+        IOSTranscriptLanguageOption(id: "it-IT", label: "Italian"),
+        IOSTranscriptLanguageOption(id: "pt-BR", label: "Portuguese"),
+        IOSTranscriptLanguageOption(id: "nl-NL", label: "Dutch"),
+        IOSTranscriptLanguageOption(id: "ru-RU", label: "Russian"),
+        IOSTranscriptLanguageOption(id: "ar-SA", label: "Arabic"),
+        IOSTranscriptLanguageOption(id: "he-IL", label: "Hebrew"),
+        IOSTranscriptLanguageOption(id: "hi-IN", label: "Hindi"),
+        IOSTranscriptLanguageOption(id: "th-TH", label: "Thai")
+    ]
 
     var body: some View {
         GeometryReader { proxy in
             ZStack {
-                controls
+                foregroundSurface
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-                pipMeasurementView(width: pipContentSize.width)
-                    .frame(width: pipContentSize.width, height: 1)
-                    .opacity(0)
-                    .accessibilityHidden(true)
-
-                PictureInPictureSourceView(
-                    controller: pictureInPictureController,
-                    configuration: pictureInPictureConfiguration,
-                    actions: pictureInPictureActions
-                )
-                .frame(width: 4, height: 4)
-                .accessibilityHidden(true)
             }
             .onAppear {
-                viewportHeight = pipContentSize.height
-                pictureInPictureController.onDidStart = {
-                    handlePictureInPictureDidStart()
+                if ProcessInfo.processInfo.arguments.contains("--reset-settings-surface") {
+                    resetUITestPlaybackSettings()
+                    isPresentationModeActive = false
+                    shouldShowSettingsSurface = true
                 }
-                pictureInPictureController.onDidStop = {
-                    handlePictureInPictureDidStop()
-                }
+                isPresentationModeActive = false
+                shouldShowSettingsSurface = true
+                UserDefaults.standard.set(false, forKey: "isPresentationModeActive")
+                UserDefaults.standard.set(true, forKey: "shouldShowSettingsSurface")
+                viewportHeight = proxy.size.height
+                promptTextWidth = max(proxy.size.width - 48, 1)
+                refreshDetectedTranscriptLanguage()
+                migrateLineBasedPlaybackDefaultsIfNeeded()
+                normalizeVoiceModeSelection()
+                updateVoiceMonitor()
             }
         }
-        .ignoresSafeArea(.keyboard, edges: .bottom)
         .onReceive(timer) { date in
             tick(at: date)
         }
         .onChange(of: script) { _, _ in
+            refreshDetectedTranscriptLanguage()
+            voiceMonitor.scriptText = script
             resetScroll()
         }
-        .onChange(of: autoPauseResumeWithLocalMic) { _, _ in
+        .onChange(of: autoPauseResumeWithLocalMic) { _, isEnabled in
+            if isEnabled {
+                transcriptBasedPrompt = false
+            }
             updateVoiceMonitor()
         }
-        .onChange(of: autoAdjustSpeedToVoicePace) { _, _ in
+        .onChange(of: transcriptBasedPrompt) { _, isEnabled in
+            if isEnabled {
+                autoPauseResumeWithLocalMic = false
+            }
+            transcriptSpokenCharacterEnd = 0
+            transcriptMatchedTokenIndex = -1
+            transcriptConsumedTokenCount = 0
             updateVoiceMonitor()
+        }
+        .onChange(of: transcriptMatchConsecutiveWords) { _, value in
+            transcriptMatchConsecutiveWords = Int(min(max(value, 1), 10))
+            transcriptSpokenCharacterEnd = 0
+            transcriptMatchedTokenIndex = -1
+            transcriptConsumedTokenCount = 0
+        }
+        .onChange(of: transcriptMaxForwardLookingWords) { _, value in
+            transcriptMaxForwardLookingWords = Int(min(max(value, 5), 100))
+            transcriptSpokenCharacterEnd = 0
+            transcriptMatchedTokenIndex = -1
+            transcriptConsumedTokenCount = 0
         }
         .onChange(of: voiceDetectionThresholdDb) { _, thresholdDb in
             voiceMonitor.voiceDetectionThresholdDb = thresholdDb
         }
+        .onChange(of: transcriptLanguageIdentifier) { _, _ in
+            updateVoiceMonitor()
+        }
         .onChange(of: voiceMonitor.isVoiceActive) { _, isVoiceActive in
             handleVoiceActivityChanged(isVoiceActive)
         }
-        .onChange(of: voiceMonitor.detectedWordsPerMinute) { _, wordsPerMinute in
-            updateSpeakingPace(wordsPerMinute)
+        .onChange(of: voiceMonitor.recognizedTranscript) { _, transcript in
+            updateRecognizedTranscriptDisplayLine(from: transcript)
+            updateTranscriptProgress(transcript)
+        }
+        .onChange(of: scenePhase) { _, newPhase in
+            guard newPhase == .active else { return }
+            handleAppBecameActive()
+        }
+        .onOpenURL { url in
+            handleIncomingURL(url)
         }
         .onDisappear {
             countdownTask?.cancel()
             voiceMonitor.stop()
-            pictureInPictureController.onDidStart = nil
-            pictureInPictureController.onDidStop = nil
         }
     }
 
-    private func promptWindow(in availableSize: CGSize) -> some View {
-        promptSurface
-            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .stroke(.white.opacity(0.16), lineWidth: 1)
-            }
-            .shadow(color: .black.opacity(0.26), radius: 18, y: 10)
-            .overlay(alignment: .top) {
+    @ViewBuilder
+    private var foregroundSurface: some View {
+        if isPresentationModeActive || !shouldShowSettingsSurface {
+            presentationForegroundSurface
+        } else {
+            controls
+        }
+    }
+
+    private var presentationForegroundSurface: some View {
+        ZStack {
+            Color.black
+                .ignoresSafeArea()
+
+            VStack(spacing: 0) {
                 promptToolbar
+
+                promptSurface
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                bottomStatusLine
             }
-            .overlay(alignment: .bottomTrailing) {
-                resizeHandle(in: availableSize)
-            }
-            .accessibilityIdentifier("promptSurface")
-            .accessibilityValue("\(Int(scrollOffset.rounded()))")
-    }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-    private var pipControlSurface: some View {
-        VStack(spacing: 18) {
-            Spacer(minLength: 0)
-
-            VStack(spacing: 8) {
-                Text("PCompanion")
-                    .font(.title2.weight(.semibold))
-                    .foregroundStyle(.white)
-                    .accessibilityIdentifier("presentationTitle")
-
-                Text(pictureInPictureStatusText)
-                    .font(.footnote)
-                    .foregroundStyle(.white.opacity(0.68))
-                    .multilineTextAlignment(.center)
-                    .accessibilityIdentifier("pictureInPictureStatus")
-            }
-
-            HStack(spacing: 16) {
-                Button {
-                    resetScroll()
-                } label: {
-                Image(systemName: "arrow.counterclockwise")
-                        .frame(width: 44, height: 44)
-                }
-                .buttonStyle(.bordered)
-                .tint(.white)
-                .accessibilityLabel("Reset")
-
-                Button {
-                    togglePlayback()
-                } label: {
-                    Image(systemName: (isRunning || isCountingDown) ? "pause.fill" : "play.fill")
-                        .frame(width: 52, height: 52)
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(.white)
-                .foregroundStyle(.black)
-                .accessibilityLabel((isRunning || isCountingDown) ? "Pause" : "Play")
-                .accessibilityIdentifier("playPauseButton")
-
-                Button {
-                    openPictureInPicture()
-                } label: {
-                    Image(systemName: "pip.enter")
-                        .frame(width: 44, height: 44)
-                }
-                .buttonStyle(.bordered)
-                .tint(.white)
-                .accessibilityLabel("Open Picture in Picture")
-                .accessibilityIdentifier("pictureInPictureButton")
-
-                Button {
-                    isSettingsPresented = true
-                } label: {
-                    Image(systemName: "gearshape.fill")
-                        .frame(width: 44, height: 44)
-                }
-                .buttonStyle(.bordered)
-                .tint(.white)
-                .accessibilityLabel("Settings")
-                .accessibilityIdentifier("settingsButton")
-            }
-
-            Text("The script is shown in Picture in Picture. This screen only controls the floating prompt.")
-                .font(.footnote)
-                .foregroundStyle(.white.opacity(0.54))
-                .multilineTextAlignment(.center)
-                .padding(.horizontal)
-
-            Spacer(minLength: 0)
+            promptOverlayMessage
         }
-        .accessibilityIdentifier("pipControlSurface")
-        .accessibilityValue("\(Int(scrollOffset.rounded()))")
     }
 
-    private func pipMeasurementView(width: CGFloat) -> some View {
-        Text(script)
-            .font(.system(size: fontSize * 0.82, weight: .regular, design: .rounded))
-            .lineSpacing(fontSize * 0.35)
-            .padding(.horizontal, 18)
-            .padding(.top, 58)
-            .padding(.bottom, 18)
-            .fixedSize(horizontal: false, vertical: true)
-            .frame(width: width, alignment: .topLeading)
-            .background(
-                GeometryReader { contentProxy in
-                    Color.clear
-                        .onAppear {
-                            contentHeight = contentProxy.size.height
-                            viewportHeight = pipContentSize.height
-                            clampScroll()
-                        }
-                        .onChange(of: contentProxy.size.height) { _, height in
-                            contentHeight = height
-                            viewportHeight = pipContentSize.height
-                            clampScroll()
-                        }
-                }
+    @ViewBuilder
+    private var promptOverlayMessage: some View {
+        if isCountingDown {
+            ZStack {
+                Color.black.opacity(0.88)
+                    .ignoresSafeArea()
+                Text("\(countdownRemaining)")
+                    .font(.system(size: 72, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white)
+            }
+            .allowsHitTesting(false)
+        } else if isWaitingForVoiceStart {
+            VStack(spacing: 10) {
+                Image(systemName: "waveform")
+                    .font(.system(size: 34, weight: .semibold))
+                Text("Start talking to move prompt forward")
+                    .font(.headline)
+            }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 22)
+            .padding(.vertical, 18)
+            .background(.black.opacity(0.72), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(.white.opacity(0.16), lineWidth: 1)
             )
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+        }
     }
 
     private var promptSurface: some View {
         GeometryReader { viewportProxy in
             ZStack(alignment: .topLeading) {
-                Color.black.opacity(opacity)
+                Color.black
 
-                Text(script)
+                Text(attributedPromptText)
                     .font(.system(size: fontSize, weight: .regular, design: .rounded))
                     .foregroundStyle(.white)
                     .lineSpacing(fontSize * 0.35)
                     .padding(.horizontal, 24)
-                    .padding(.top, 72)
-                    .padding(.bottom, 28)
+                    .padding(.top, promptTopPadding)
+                    .padding(.bottom, promptBottomPadding)
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .topLeading)
                     .background(
@@ -306,39 +318,117 @@ Thank you.
                     )
                     .offset(y: -scrollOffset)
 
-                VStack(spacing: 0) {
-                    Color.clear
-                        .frame(height: 60)
-
-                    TapZoneView { zone, tapCount in
-                        handleTap(zone: zone, tapCount: tapCount)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                }
             }
             .clipped()
             .onAppear {
                 viewportHeight = viewportProxy.size.height
+                promptTextWidth = max(viewportProxy.size.width - 48, 1)
                 clampScroll()
             }
             .onChange(of: viewportProxy.size.height) { _, height in
                 viewportHeight = height
                 clampScroll()
             }
+            .onChange(of: viewportProxy.size.width) { _, width in
+                promptTextWidth = max(width - 48, 1)
+                clampScroll()
+            }
+            .contentShape(Rectangle())
+            .gesture(
+                SpatialTapGesture(count: 2)
+                    .exclusively(before: SpatialTapGesture(count: 1))
+                    .onEnded { result in
+                        switch result {
+                        case .first(let value):
+                            handlePromptTap(at: value.location, in: viewportProxy.size, multiplier: 2)
+                        case .second(let value):
+                            handlePromptTap(at: value.location, in: viewportProxy.size, multiplier: 1)
+                        }
+                    }
+            )
+        }
+        .accessibilityIdentifier("presentationForegroundSurface")
+        .accessibilityValue("\(Int(scrollOffset.rounded()))")
+        .simultaneousGesture(
+            DragGesture()
+                .onChanged { value in
+                    let start = dragStartScrollOffset ?? scrollOffset
+                    dragStartScrollOffset = start
+                    scrollOffset = start - value.translation.height
+                    clampScroll()
+                }
+                .onEnded { _ in
+                    dragStartScrollOffset = nil
+                }
+        )
+    }
+
+    private var attributedPromptText: AttributedString {
+        var attributed = AttributedString(script)
+        let clampedEnd = min(max(transcriptBasedPrompt ? transcriptSpokenCharacterEnd : 0, 0), (script as NSString).length)
+        if clampedEnd > 0,
+           let stringRange = Range(NSRange(location: 0, length: clampedEnd), in: script),
+           let attributedRange = Range(stringRange, in: attributed) {
+            attributed[attributedRange].foregroundColor = .blue
+        }
+        return attributed
+    }
+
+    private var bottomStatusLine: some View {
+        HStack(spacing: 8) {
+            if autoPauseResumeWithLocalMic || transcriptBasedPrompt || !recognizedTranscriptDisplayLine.isEmpty {
+                statusLeadingLabel
+                    .frame(width: 128, alignment: .leading)
+                if transcriptBasedPrompt {
+                    Text(recognizedTranscriptDisplayLine)
+                        .foregroundStyle(.blue)
+                        .font(.system(size: max(12, fontSize * 0.45), weight: .medium))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                } else {
+                    Spacer(minLength: 0)
+                }
+            } else {
+                Spacer(minLength: 0)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, minHeight: 48)
+        .background(.black)
+        .overlay(alignment: .top) {
+            Rectangle()
+                .fill(.white.opacity(0.10))
+                .frame(height: 1)
+        }
+        .allowsHitTesting(false)
+    }
+
+    @ViewBuilder
+    private var statusLeadingLabel: some View {
+        if autoPauseResumeWithLocalMic {
+            HStack(spacing: 3) {
+                Text("Voice:")
+                    .foregroundStyle(.white.opacity(0.72))
+                Text("\(Int(voiceMonitor.inputLevelDb.rounded())) dB")
+                    .foregroundStyle(.red)
+            }
+            .font(.system(size: 11, weight: .semibold))
+            .monospacedDigit()
+            .lineLimit(1)
+        } else if transcriptBasedPrompt {
+            Text(transcriptLanguageLabel(for: effectiveTranscriptLanguageIdentifier))
+                .foregroundStyle(.blue)
+                .font(.system(size: 11, weight: .semibold))
+                .lineLimit(1)
+        } else {
+            EmptyView()
         }
     }
 
     private var promptToolbar: some View {
         HStack(spacing: 8) {
-            Text("PCompanion")
-                .font(.subheadline.weight(.semibold))
-                .lineLimit(1)
-                .minimumScaleFactor(0.72)
-                .foregroundStyle(.white)
-                .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
-                .accessibilityIdentifier("presentationTitle")
-                .layoutPriority(0)
-
             Button {
                 togglePlayback()
             } label: {
@@ -349,31 +439,40 @@ Thank you.
             .buttonStyle(.plain)
             .foregroundStyle(.white)
             .background(.white.opacity(0.16), in: Circle())
-            .accessibilityLabel((isRunning || isCountingDown) ? "Pause" : "Play")
+            .accessibilityLabel((isRunning || isCountingDown) ? "Pause Prompt" : "Start Prompt")
             .accessibilityIdentifier("playPauseButton")
             .layoutPriority(1)
 
             Button {
-                guard pictureInPictureController.isSupported else {
-                    pictureInPictureController.showUnsupportedMessage()
-                    return
-                }
-                pictureInPictureController.toggle()
+                resetScroll()
             } label: {
-                Image(systemName: pictureInPictureController.isActive ? "pip.exit" : "pip.enter")
+                Image(systemName: "arrow.counterclockwise")
                     .font(.headline)
                     .frame(width: 34, height: 34)
             }
             .buttonStyle(.plain)
             .foregroundStyle(.white)
             .background(.white.opacity(0.16), in: Circle())
-            .opacity(pictureInPictureController.isSupported ? 1 : 0.48)
-            .accessibilityLabel(pictureInPictureController.isActive ? "Stop Picture in Picture" : "Start Picture in Picture")
-            .accessibilityIdentifier("pictureInPictureButton")
+            .accessibilityLabel("Reset")
+            .accessibilityIdentifier("resetButton")
             .layoutPriority(1)
 
+            toolbarJumpButton(
+                symbol: "gobackward",
+                accessibilityLabel: "Back by configured line pace",
+                accessibilityIdentifier: "backButton",
+                direction: -1
+            )
+
+            toolbarJumpButton(
+                symbol: "goforward",
+                accessibilityLabel: "Forward by configured line pace",
+                accessibilityIdentifier: "forwardButton",
+                direction: 1
+            )
+
             Button {
-                isSettingsPresented = true
+                openSettings()
             } label: {
                 Image(systemName: "gearshape.fill")
                     .font(.headline)
@@ -385,6 +484,48 @@ Thank you.
             .accessibilityLabel("Settings")
             .accessibilityIdentifier("settingsButton")
             .layoutPriority(1)
+
+            Spacer(minLength: 8)
+
+            Button {
+                if let text = UIPasteboard.general.string {
+                    script = text
+                    resetScroll()
+                }
+            } label: {
+                Image(systemName: "doc.on.clipboard")
+                    .font(.headline)
+                    .frame(width: 34, height: 34)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.white)
+            .background(.white.opacity(0.16), in: Circle())
+            .accessibilityLabel("Paste script from clipboard")
+
+            Button {
+                script = ""
+                resetScroll()
+            } label: {
+                Image(systemName: "trash")
+                    .font(.headline)
+                    .frame(width: 34, height: 34)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.white)
+            .background(.white.opacity(0.16), in: Circle())
+            .accessibilityLabel("Clear script")
+
+            Button {
+                exit(0)
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.headline)
+                    .frame(width: 34, height: 34)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.white)
+            .background(.white.opacity(0.16), in: Circle())
+            .accessibilityLabel("Quit Presentation Companion")
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
@@ -397,157 +538,280 @@ Thank you.
         )
     }
 
+    private func toolbarJumpButton(
+        symbol: String,
+        accessibilityLabel: String,
+        accessibilityIdentifier: String,
+        direction: Double
+    ) -> some View {
+        Image(systemName: symbol)
+            .font(.headline)
+            .frame(width: 34, height: 34)
+            .foregroundStyle(.white)
+            .background(.white.opacity(0.16), in: Circle())
+            .contentShape(Circle())
+            .gesture(
+                TapGesture(count: 2)
+                    .exclusively(before: TapGesture())
+                    .onEnded { result in
+                        switch result {
+                        case .first:
+                            jump(lines: paceLines * direction * 2)
+                        case .second:
+                            jump(lines: paceLines * direction)
+                        }
+                    }
+            )
+            .accessibilityLabel(accessibilityLabel)
+            .accessibilityIdentifier(accessibilityIdentifier)
+            .layoutPriority(1)
+    }
+
+    private var scriptEditorResizeHandle: some View {
+        HStack {
+            Spacer()
+            Image(systemName: "line.3.horizontal")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 48, height: 22)
+                .contentShape(Rectangle())
+                .gesture(
+                    DragGesture()
+                        .onChanged { value in
+                            let startHeight = scriptEditorResizeStartHeight ?? scriptEditorHeight
+                            scriptEditorResizeStartHeight = startHeight
+                            scriptEditorHeight = min(max(startHeight + Double(value.translation.height), 140), 520)
+                        }
+                        .onEnded { _ in
+                            scriptEditorResizeStartHeight = nil
+                        }
+                )
+                .accessibilityLabel("Resize script editor")
+        }
+    }
+
     private var controls: some View {
         NavigationStack {
-            Form {
-                Section("Script") {
-                    TextEditor(text: $script)
-                        .font(.system(.body, design: .monospaced))
-                        .focused($isScriptFocused)
-                        .frame(minHeight: 170)
-                        .scrollContentBackground(.hidden)
-                        .accessibilityIdentifier("scriptEditor")
-                }
-
-                Section("Playback") {
-                    HStack {
-                        Button {
-                            resetScroll()
-                        } label: {
-                            Label("Reset", systemImage: "arrow.counterclockwise")
-                        }
-
-                        Spacer()
-
-                        Button {
-                            togglePlayback()
-                        } label: {
-                            Label(
-                                (isRunning || isCountingDown) ? "Pause" : "Play",
-                                systemImage: (isRunning || isCountingDown) ? "pause.fill" : "play.fill"
-                            )
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .accessibilityLabel((isRunning || isCountingDown) ? "Pause" : "Play")
-                    }
-
-                    sliderRow("Speed", value: $speed, range: 20...180, step: 5, suffix: " pt/s")
-
-                    Picker("Scroll mode", selection: $scrollMode) {
-                        Text("Infinite").tag(IOSScrollMode.infinite)
-                        Text("Stop at end").tag(IOSScrollMode.stopAtEnd)
-                    }
-                    .pickerStyle(.segmented)
-
-                    Picker("Countdown", selection: $countdownBehavior) {
-                        ForEach(IOSCountdownBehavior.allCases, id: \.self) { behavior in
-                            Text(behavior.label).tag(behavior)
-                        }
-                    }
-                    .pickerStyle(.menu)
-
-                    sliderRow(
-                        "Countdown duration",
-                        value: Binding(
-                            get: { Double(countdownSeconds) },
-                            set: { countdownSeconds = Int($0.rounded()) }
-                        ),
-                        range: 0...10,
-                        step: 1,
-                        suffix: "s"
-                    )
-                    .disabled(countdownBehavior == .never)
-
-                    if isCountingDown {
-                        Text("Starting in \(countdownRemaining)s")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
-
-                    sliderRow("Fast forward/backward scrolling pace", value: $paceSeconds, range: 1...30, step: 1, suffix: "s")
-                    Toggle("Click content area to start, pause, or resume", isOn: $clickContentTogglesPlayback)
-                }
-
-                Section("Appearance") {
-                    sliderRow("Font size", value: $fontSize, range: 16...60, step: 1, suffix: " pt")
-                    sliderRow("PiP width", value: $pipWidth, range: 300...640, step: 10, suffix: " pt")
-                        .onChange(of: pipWidth) { _, _ in
-                            viewportHeight = pipContentSize.height
-                            clampScroll()
-                        }
-                    sliderRow("PiP height", value: $pipHeight, range: 180...420, step: 10, suffix: " pt")
-                        .onChange(of: pipHeight) { _, _ in
-                            viewportHeight = pipContentSize.height
-                            clampScroll()
-                        }
-                    sliderRow("Opacity", value: $opacity, range: 0.35...1, step: 0.05) { value in
-                        "\(Int((value * 100).rounded()))%"
-                    }
-                }
-
-                Section("Voice") {
-                    Toggle("Auto pause/resume from local mic", isOn: $autoPauseResumeWithLocalMic)
-                    Toggle("Auto adjust speed to speaking pace", isOn: $autoAdjustSpeedToVoicePace)
-                    sliderRow("Voice detection threshold", value: $voiceDetectionThresholdDb, range: 0...30, step: 1, suffix: " dB")
-
-                    if voiceMonitor.isMonitoring {
-                        Text("Mic: \(voiceMonitor.isVoiceActive ? "voice detected" : "listening") · \(Int(voiceMonitor.inputLevelDb.rounded())) dB")
-                            .font(.footnote)
-                            .foregroundStyle(voiceMonitor.isVoiceActive ? .green : .secondary)
-                    }
-
-                    if let message = voiceMonitor.unavailableMessage {
-                        Text(message)
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
-
-                    if let wordsPerMinute = voiceMonitor.detectedWordsPerMinute {
-                        Text("Detected pace: \(Int(wordsPerMinute.rounded())) wpm")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
-                Section("Picture in Picture") {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
                     Button {
-                        openPictureInPicture()
+                        dismissScriptKeyboard()
+                        resumeManually()
                     } label: {
-                        Label(
-                            pictureInPictureController.isActive ? "Picture in Picture is active" : "Open Picture in Picture",
-                            systemImage: "pip.enter"
+                        Label("Present", systemImage: "play.fill")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+                    .accessibilityIdentifier("presentButton")
+
+                    settingsSection("Presentation Script") {
+                        TextEditor(text: $script)
+                            .font(.system(size: 16, design: .monospaced))
+                            .scrollContentBackground(.hidden)
+                            .background(Color(.secondarySystemGroupedBackground))
+                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                    .stroke(Color(.separator).opacity(0.7), lineWidth: 1)
+                            )
+                            .frame(height: scriptEditorHeight)
+                            .focused($isScriptFocused)
+                            .accessibilityIdentifier("scriptEditor")
+
+                        scriptEditorResizeHandle
+
+                        HStack(alignment: .firstTextBaseline, spacing: 10) {
+                            Text("\(scriptWordCount) words")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+
+                            Spacer(minLength: 6)
+
+                            HStack(spacing: 4) {
+                                Text("Detected: \(transcriptLanguageLabel(for: detectedTranscriptLanguageIdentifier)). Using:")
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                                Picker("", selection: $transcriptLanguageIdentifier) {
+                                    Text("Auto (\(transcriptLanguageLabel(for: detectedTranscriptLanguageIdentifier)))").tag("auto")
+                                    ForEach(transcriptLanguageOptions.filter { $0.id != "auto" }) { option in
+                                        Text(option.label).tag(option.id)
+                                    }
+                                }
+                                .labelsHidden()
+                                .font(.footnote)
+                                .pickerStyle(.menu)
+                            }
+                        }
+
+                        if !sourceLink.isEmpty {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text("Current link")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.secondary)
+                                if let url = URL(string: sourceLink) {
+                                    Link(sourceLink, destination: url)
+                                        .font(.footnote)
+                                        .lineLimit(2)
+                                } else {
+                                    Text(sourceLink)
+                                        .font(.footnote)
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(2)
+                                }
+                            }
+                        }
+
+                        HStack(spacing: 10) {
+                            Button(role: .destructive) {
+                                resetScroll()
+                            } label: {
+                                Label("Reset", systemImage: "arrow.counterclockwise")
+                            }
+                            .buttonStyle(.bordered)
+
+                            Button {
+                                dismissScriptKeyboard()
+                                linkInput = ""
+                                isLoadLinkPresented = true
+                            } label: {
+                                Label("Load from Link", systemImage: "link")
+                            }
+                            .disabled(isLoadingLink)
+                            .buttonStyle(.bordered)
+                        }
+
+                        if isLoadingLink {
+                            ProgressView("Loading link...")
+                        }
+                    }
+
+                    settingsSection("Playback") {
+                        sliderRow("Scroll speed", value: $secondsPerLine, range: 1...20, step: 1, suffix: "s/line")
+
+                        sliderRow("Forward/backward pace", value: $paceLines, range: 1...10, step: 1, suffix: " lines")
+
+                        Picker("Scroll mode", selection: scrollModeBinding) {
+                            Text("Infinite").tag(IOSScrollMode.infinite)
+                            Text("Stop at end").tag(IOSScrollMode.stopAtEnd)
+                        }
+                        .pickerStyle(.segmented)
+
+                        Picker("Countdown", selection: countdownBehaviorBinding) {
+                            ForEach(IOSCountdownBehavior.allCases, id: \.self) { behavior in
+                                Text(behavior.label).tag(behavior)
+                            }
+                        }
+                        .pickerStyle(.menu)
+
+                        sliderRow(
+                            "Countdown duration",
+                            value: Binding(
+                                get: { Double(countdownSeconds) },
+                                set: { countdownSeconds = Int($0.rounded()) }
+                            ),
+                            range: 0...10,
+                            step: 1,
+                            suffix: "s"
                         )
-                    }
-                    .disabled(!pictureInPictureController.isSupported)
+                        .disabled(countdownBehavior == .never)
 
-                    if !pictureInPictureController.isSupported {
-                        Text("Picture in Picture is not available on this device.")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
+                        if isCountingDown {
+                            Text("Starting in \(countdownRemaining)s")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
                     }
 
-                    if let message = pictureInPictureController.statusMessage {
-                        Text(message)
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
+                    settingsSection("Appearance") {
+                        sliderRow("Font size", value: $fontSize, range: 16...60, step: 1, suffix: " pt")
+                    }
+
+                    settingsSection("Voice") {
+                        Toggle("Auto pause/resume from voice", isOn: $autoPauseResumeWithLocalMic)
+                        sliderRow("Voice detection threshold", value: $voiceDetectionThresholdDb, range: -70...20, step: 1, suffix: " dB")
+                            .padding(.leading, 18)
+                            .disabled(!autoPauseResumeWithLocalMic)
+                            .opacity(autoPauseResumeWithLocalMic ? 1 : 0.55)
+
+                        Toggle("Transcript based prompt", isOn: $transcriptBasedPrompt)
+                        Stepper(
+                            "Match consecutive words: \(transcriptMatchConsecutiveWords)",
+                            value: $transcriptMatchConsecutiveWords,
+                            in: 1...10
+                        )
+                        .padding(.leading, 18)
+                        .disabled(!transcriptBasedPrompt)
+                        .opacity(transcriptBasedPrompt ? 1 : 0.55)
+
+                        Stepper(
+                            "Max forward looking words: \(transcriptMaxForwardLookingWords)",
+                            value: $transcriptMaxForwardLookingWords,
+                            in: 5...100
+                        )
+                        .padding(.leading, 18)
+                        .disabled(!transcriptBasedPrompt)
+                        .opacity(transcriptBasedPrompt ? 1 : 0.55)
+
+                        if voiceMonitor.isMonitoring {
+                            Text("Mic: \(voiceMonitor.isVoiceActive ? "voice detected" : "listening") · \(Int(voiceMonitor.inputLevelDb.rounded())) dB")
+                                .font(.footnote)
+                                .foregroundStyle(voiceMonitor.isVoiceActive ? .green : .secondary)
+                        }
+
+                        if let message = voiceMonitor.unavailableMessage {
+                            Text(message)
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+                        if let message = voiceMonitor.transcriptUnavailableMessage {
+                            Text(message)
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+
+                    }
+
+                    settingsSection("About") {
+                        Link("GitHub repository", destination: URL(string: "https://github.com/techtony2018/notchprompt")!)
+
+                        HStack {
+                            Text("Version")
+                            Spacer()
+                            Text(appVersionText)
+                                .foregroundStyle(.secondary)
+                        }
                     }
                 }
-
-                Section("About") {
-                    LabeledContent("Version", value: appVersionText)
-                }
+                .padding(.horizontal, 18)
+                .padding(.vertical, 16)
             }
-            .navigationTitle("PCompanion")
+            .background(Color(.systemGroupedBackground))
+            .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
             .accessibilityIdentifier("configurationSurface")
             .accessibilityValue("\(Int(scrollOffset.rounded()))")
             .scrollDismissesKeyboard(.interactively)
-            .background(
-                KeyboardDismissOnOutsideInput {
-                    isScriptFocused = false
-                }
-            )
             .toolbar {
+                ToolbarItem(placement: .principal) {
+                    Button {
+                        dismissScriptKeyboard()
+                    } label: {
+                        HStack(spacing: 8) {
+                            Text("Presentation Companion")
+                                .font(.headline.weight(.semibold))
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.76)
+                            Image("AppIcon")
+                                .resizable()
+                                .frame(width: 24, height: 24)
+                                .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("settingsTitle")
+                }
+
                 ToolbarItem(placement: .topBarTrailing) {
                     Text(appVersionText)
                         .font(.footnote.weight(.medium))
@@ -555,9 +819,8 @@ Thank you.
                 }
 
                 ToolbarItemGroup(placement: .keyboard) {
-                    Spacer()
                     Button("Done") {
-                        isScriptFocused = false
+                        dismissScriptKeyboard()
                     }
                 }
             }
@@ -568,24 +831,56 @@ Thank you.
                     .accessibilityIdentifier("configurationSurface")
                     .accessibilityValue("\(Int(scrollOffset.rounded()))")
             }
-            .safeAreaInset(edge: .bottom) {
-                Button {
-                    togglePlayback()
-                } label: {
-                    Label(
-                        (isRunning || isCountingDown) ? "Pause PiP Prompt" : "Start PiP Prompt",
-                        systemImage: (isRunning || isCountingDown) ? "pause.fill" : "play.fill"
-                    )
-                    .frame(maxWidth: .infinity)
+            .alert("Load from Link", isPresented: $isLoadLinkPresented) {
+                TextField("https://example.com/article", text: $linkInput)
+                    .textInputAutocapitalization(.never)
+                    .keyboardType(.URL)
+                    .autocorrectionDisabled()
+                Button("Load") {
+                    Task {
+                        await loadScriptFromLink()
+                    }
                 }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
-                .accessibilityLabel((isRunning || isCountingDown) ? "Pause" : "Play")
-                .accessibilityIdentifier("playPauseButton")
-                .padding(.horizontal, 16)
-                .padding(.vertical, 10)
-                .background(.regularMaterial)
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Enter an article link to load clean text into Presentation Script.")
             }
+            .alert(
+                "Load Link Failed",
+                isPresented: Binding(
+                    get: { loadLinkErrorMessage != nil },
+                    set: { isPresented in
+                        if !isPresented {
+                            loadLinkErrorMessage = nil
+                        }
+                    }
+                )
+            ) {
+                Button("OK", role: .cancel) {
+                    loadLinkErrorMessage = nil
+                }
+            } message: {
+                Text(loadLinkErrorMessage ?? "The link could not be loaded.")
+            }
+        }
+    }
+
+    private func settingsSection<Content: View>(
+        _ title: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .textCase(.uppercase)
+
+            VStack(alignment: .leading, spacing: 12) {
+                content()
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(14)
+            .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
     }
 
@@ -623,53 +918,146 @@ Thank you.
     private func tick(at date: Date) {
         defer { lastTickDate = date }
         guard isRunning else { return }
+        guard !transcriptBasedPrompt else { return }
 
         let deltaTime = min(max(date.timeIntervalSince(lastTickDate ?? date), 0), 0.25)
-        scrollOffset += CGFloat(speed * deltaTime)
+        scrollOffset += promptLineHeight * CGFloat(deltaTime) / max(CGFloat(secondsPerLine), 0.1)
         clampScroll()
     }
 
-    private func openPictureInPicture() {
-        guard pictureInPictureController.isSupported else {
-            pictureInPictureController.showUnsupportedMessage()
-            return
-        }
-        pictureInPictureController.start()
-    }
-
     private func togglePlayback() {
+        presentationLog("togglePlayback running=\(isRunning) counting=\(isCountingDown)")
         isScriptFocused = false
         if isRunning || isCountingDown {
             pauseManually()
         } else {
-            resumeManually(hideAppAfterPictureInPictureStarts: true)
+            resumeManually()
         }
     }
 
-    private func handleTap(zone: TapZone, tapCount: Int) {
-        switch zone {
-        case .left:
-            jump(seconds: -paceSeconds * Double(tapCount))
-        case .center:
-            guard clickContentTogglesPlayback else { return }
-            togglePlayback()
-        case .right:
-            jump(seconds: paceSeconds * Double(tapCount))
-        }
-    }
-
-    private func jump(seconds: Double) {
-        scrollOffset += CGFloat(speed * seconds)
+    private func jump(lines: Double) {
+        presentationLog("jump lines=\(lines)")
+        scrollOffset += promptLineHeight * CGFloat(lines)
         clampScroll()
     }
 
+    private func handlePromptTap(at location: CGPoint, in size: CGSize, multiplier: Double) {
+        let third = max(size.width / 3, 1)
+        if location.x < third {
+            jump(lines: -paceLines * multiplier)
+        } else if location.x > third * 2 {
+            jump(lines: paceLines * multiplier)
+        } else {
+            togglePlayback()
+        }
+    }
+
     private func resetScroll() {
+        presentationLogger.notice("resetScroll")
         stopPlayback()
         scrollOffset = 0
+        transcriptSpokenCharacterEnd = 0
+        transcriptMatchedTokenIndex = -1
+        transcriptConsumedTokenCount = 0
+        transcriptVisibleUTF16Range = 0..<Int.max
+        previousRecognizedTranscript = ""
+        recognizedTranscriptDisplayLine = ""
+        voiceMonitor.resetTranscriptState()
         lastTickDate = nil
         isPausedByVoiceMonitor = false
         isVoiceResumeBlockedByManualPause = false
         shouldUseCountdownOnNextStart = true
+    }
+
+    private func openSettings() {
+        presentationLog("openSettings")
+        isScriptFocused = false
+        stopPlayback()
+        isPresentationModeActive = false
+        shouldShowSettingsSurface = true
+        isPausedByVoiceMonitor = false
+        isVoiceResumeBlockedByManualPause = false
+        isWaitingForVoiceStart = false
+    }
+
+    private func loadScriptFromLink() async {
+        guard !isLoadingLink else { return }
+        isLoadingLink = true
+        defer { isLoadingLink = false }
+
+        do {
+            script = try await ScriptLinkLoader.loadScript(from: linkInput)
+            sourceLink = linkInput.trimmingCharacters(in: .whitespacesAndNewlines)
+            resetScroll()
+        } catch {
+            loadLinkErrorMessage = error.localizedDescription
+        }
+    }
+
+    private func dismissScriptKeyboard() {
+        isScriptFocused = false
+        UIApplication.shared.sendAction(
+            #selector(UIResponder.resignFirstResponder),
+            to: nil,
+            from: nil,
+            for: nil
+        )
+    }
+
+    private func migrateLineBasedPlaybackDefaultsIfNeeded() {
+        let defaults = UserDefaults.standard
+        let speedMigrationKey = "ios.lineBasedSpeedMigration"
+        if defaults.object(forKey: speedMigrationKey) == nil {
+            secondsPerLine = 5
+            defaults.set(true, forKey: speedMigrationKey)
+        }
+        let paceMigrationKey = "ios.lineBasedPaceMigration"
+        if defaults.object(forKey: paceMigrationKey) == nil {
+            paceLines = 2
+            defaults.set(true, forKey: paceMigrationKey)
+        }
+    }
+
+    private func normalizeVoiceModeSelection() {
+        if transcriptBasedPrompt {
+            autoPauseResumeWithLocalMic = false
+        }
+    }
+
+    private func resetUITestPlaybackSettings() {
+        autoPauseResumeWithLocalMic = false
+        transcriptBasedPrompt = false
+        transcriptLanguageIdentifier = "auto"
+        countdownBehaviorRaw = IOSCountdownBehavior.freshStartOnly.rawValue
+        countdownSeconds = 3
+        scrollModeRaw = IOSScrollMode.infinite.rawValue
+        secondsPerLine = 5
+        paceLines = 2
+        shouldUseCountdownOnNextStart = true
+        resetScroll()
+    }
+
+    private var effectiveTranscriptLanguageIdentifier: String {
+        transcriptLanguageIdentifier == "auto" ? detectedTranscriptLanguageIdentifier : transcriptLanguageIdentifier
+    }
+
+    private var scriptEditorProgressUTF16Offset: Int {
+        let visibleProgress = scrollOffset > 0 ? currentVisibleUTF16Range().lowerBound : 0
+        return max(transcriptSpokenCharacterEnd, visibleProgress)
+    }
+
+    private func refreshDetectedTranscriptLanguage() {
+        detectedTranscriptLanguageIdentifier = IOSLocalMicrophoneVoiceMonitor.bestSpeechLocaleIdentifier(for: script)
+        if !transcriptLanguageOptions.contains(where: { $0.id == transcriptLanguageIdentifier }) {
+            transcriptLanguageIdentifier = "auto"
+        }
+    }
+
+    private func transcriptLanguageLabel(for identifier: String) -> String {
+        if let option = transcriptLanguageOptions.first(where: { $0.id == identifier }) {
+            return option.label
+        }
+        return Locale.current.localizedString(forIdentifier: identifier) ?? identifier
     }
 
     private func clampScroll() {
@@ -685,6 +1073,11 @@ Thank you.
 
         if scrollMode == .infinite, isRunning, scrollOffset >= maxOffset {
             scrollOffset = 0
+            if transcriptBasedPrompt {
+                transcriptSpokenCharacterEnd = 0
+                transcriptMatchedTokenIndex = -1
+                transcriptConsumedTokenCount = 0
+            }
             return
         }
 
@@ -695,6 +1088,7 @@ Thank you.
     }
 
     private func pauseManually() {
+        presentationLog("pauseManually")
         stopPlayback()
         isPausedByVoiceMonitor = false
         if autoPauseResumeWithLocalMic {
@@ -702,20 +1096,23 @@ Thank you.
         }
     }
 
-    private func resumeManually(hideAppAfterPictureInPictureStarts: Bool) {
+    private func resumeManually() {
+        presentationLog("resumeManually")
         isVoiceResumeBlockedByManualPause = false
-        startPlayback(hideAppAfterPictureInPictureStarts: hideAppAfterPictureInPictureStarts)
+        startPlayback()
     }
 
-    private func startPlayback(hideAppAfterPictureInPictureStarts: Bool) {
+    private func startPlayback() {
         guard !isRunning, !isCountingDown else { return }
 
+        presentationLog("startPlayback")
         isPausedByVoiceMonitor = false
-        isReturningToSettings = false
-        if hideAppAfterPictureInPictureStarts, !pictureInPictureController.isActive {
-            shouldHideAppWhenPictureInPictureStarts = true
-            openPictureInPicture()
-        }
+        continueStartingPlayback()
+    }
+
+    private func continueStartingPlayback() {
+        isPresentationModeActive = true
+        shouldShowSettingsSurface = false
 
         if scrollMode == .stopAtEnd {
             let maxOffset = max(contentHeight - viewportHeight, 0)
@@ -736,6 +1133,10 @@ Thank you.
         }
 
         guard shouldRunCountdown else {
+            if autoPauseResumeWithLocalMic, shouldUseCountdownOnNextStart {
+                beginWaitingForVoiceStart()
+                return
+            }
             beginRunningNow()
             return
         }
@@ -749,6 +1150,7 @@ Thank you.
         isCountingDown = false
         countdownRemaining = 0
         isRunning = false
+        isWaitingForVoiceStart = false
     }
 
     private func beginCountdown(seconds: Int) {
@@ -771,22 +1173,75 @@ Thank you.
             }
 
             guard !Task.isCancelled else { return }
-            beginRunningNow()
+            if autoPauseResumeWithLocalMic {
+                beginWaitingForVoiceStart()
+            } else {
+                beginRunningNow()
+            }
             countdownTask = nil
         }
     }
 
-    private func beginRunningNow() {
+    private func beginWaitingForVoiceStart() {
+        presentationLog("beginWaitingForVoiceStart")
         isCountingDown = false
         countdownRemaining = 0
         shouldUseCountdownOnNextStart = false
+        isRunning = false
+        isPausedByVoiceMonitor = true
+        isVoiceResumeBlockedByManualPause = false
+        isWaitingForVoiceStart = true
+        lastTickDate = nil
+        updateVoiceMonitor()
+    }
+
+    private func beginRunningNow() {
+        presentationLog("beginRunningNow")
+        isCountingDown = false
+        countdownRemaining = 0
+        shouldUseCountdownOnNextStart = false
+        isWaitingForVoiceStart = false
         isRunning = true
         lastTickDate = nil
-        openPictureInPicture()
+    }
+
+    private func handleIncomingURL(_ url: URL) {
+        let components = [url.host, url.path]
+            .compactMap { $0 }
+            .flatMap { $0.split(separator: "/").map(String.init) }
+            .map { $0.lowercased() }
+
+        guard components.first == "qa" || components.first == "settings" else {
+            presentationLog("handleIncomingURL ignored url=\(url.absoluteString)")
+            return
+        }
+
+        let action = components.dropFirst().first ?? components.first ?? ""
+        presentationLog("handleIncomingURL action=\(action) url=\(url.absoluteString)")
+        switch action {
+        case "play", "start", "resume":
+            resumeManually()
+        case "pause":
+            pauseManually()
+        case "toggle":
+            togglePlayback()
+        case "back", "backward":
+            jump(lines: -paceLines)
+        case "forward":
+            jump(lines: paceLines)
+        case "reset":
+            resetScroll()
+        case "settings":
+            openSettings()
+        default:
+            if components.first == "settings" {
+                openSettings()
+            }
+        }
     }
 
     private func updateVoiceMonitor() {
-        guard autoPauseResumeWithLocalMic || autoAdjustSpeedToVoicePace else {
+        guard autoPauseResumeWithLocalMic || transcriptBasedPrompt else {
             voiceMonitor.stop()
             isPausedByVoiceMonitor = false
             isVoiceResumeBlockedByManualPause = false
@@ -794,6 +1249,9 @@ Thank you.
         }
 
         voiceMonitor.voiceDetectionThresholdDb = voiceDetectionThresholdDb
+        voiceMonitor.transcriptTrackingEnabled = transcriptBasedPrompt
+        voiceMonitor.preferredRecognitionLocaleIdentifier = transcriptLanguageIdentifier == "auto" ? nil : transcriptLanguageIdentifier
+        voiceMonitor.scriptText = script
         voiceMonitor.start()
     }
 
@@ -806,7 +1264,8 @@ Thank you.
                   !isRunning,
                   !isCountingDown else { return }
             isPausedByVoiceMonitor = false
-            startPlayback(hideAppAfterPictureInPictureStarts: false)
+            isWaitingForVoiceStart = false
+            startPlayback()
             return
         }
 
@@ -816,328 +1275,379 @@ Thank you.
         lastTickDate = nil
     }
 
-    private func updateSpeakingPace(_ wordsPerMinute: Double?) {
-        guard autoAdjustSpeedToVoicePace,
-              let wordsPerMinute else { return }
-        let target = 70 * (wordsPerMinute / 160)
-        let smoothed = (speed * 0.82) + (target * 0.18)
-        speed = min(max(smoothed, 20), 180)
+    private func updateTranscriptProgress(_ transcript: String) {
+        guard transcriptBasedPrompt else { return }
+        transcriptVisibleUTF16Range = currentVisibleUTF16Range()
+        let progress = transcriptProgress(for: transcript)
+        transcriptSpokenCharacterEnd = progress.spokenCharacterEnd
+        guard progress.spokenCharacterEnd > 0 else { return }
+        let maxOffset = max(contentHeight - viewportHeight, 0)
+        let targetOffset = renderedPromptHeight(upToUTF16Offset: progress.spokenCharacterEnd) - (promptViewportHeight * 0.5)
+        guard abs(targetOffset - scrollOffset) > 2 else { return }
+        scrollOffset = min(max(targetOffset, 0), maxOffset)
     }
 
-    private func promptWidth(for availableSize: CGSize) -> CGFloat {
-        let minimum = min(availableSize.width * 0.62, 280)
-        return max(availableSize.width * promptWidthFraction, minimum)
+    private func transcriptProgressFraction(for transcript: String) -> Double {
+        transcriptProgress(for: transcript).lineCompletedFraction
     }
 
-    private func promptHeight(for availableSize: CGSize) -> CGFloat {
-        let minimum = min(availableSize.height * 0.48, 260)
-        return max(availableSize.height * promptHeightFraction, minimum)
-    }
-
-    private func promptPosition(in proxy: GeometryProxy) -> CGPoint {
-        let availableSize = proxy.size
-        let width = promptWidth(for: availableSize)
-        let height = promptHeight(for: availableSize)
-        let edgePadding: CGFloat = 10
-        let isLandscape = availableSize.width > availableSize.height
-
-        if isLandscape {
-            let safeInsets = proxy.safeAreaInsets
-            let shouldPinLeft = safeInsets.leading > safeInsets.trailing
-            return CGPoint(
-                x: shouldPinLeft
-                    ? (width / 2) + edgePadding
-                    : availableSize.width - (width / 2) - edgePadding,
-                y: availableSize.height / 2
-            )
+    private func transcriptProgress(for transcript: String) -> (lineCompletedFraction: Double, spokenCharacterEnd: Int) {
+        let scriptTokens = scriptTokenInfos(in: script)
+        let transcriptTokens = normalizedTokens(transcript)
+        guard !scriptTokens.isEmpty, !transcriptTokens.isEmpty else { return (0, 0) }
+        if transcriptConsumedTokenCount > transcriptTokens.count {
+            transcriptConsumedTokenCount = 0
         }
 
-        return CGPoint(
-            x: availableSize.width / 2,
-            y: (height / 2) + edgePadding
+        let visibleTokenRange = visibleTokenRange(in: scriptTokens)
+        guard visibleTokenRange.lowerBound < visibleTokenRange.upperBound else {
+            guard transcriptMatchedTokenIndex >= 0 else { return (0, 0) }
+            return scriptProgress(at: transcriptMatchedTokenIndex, in: scriptTokens)
+        }
+
+        var isCurrentAnchorVisible = visibleTokenRange.contains(transcriptMatchedTokenIndex)
+        if !isCurrentAnchorVisible {
+            transcriptMatchedTokenIndex = visibleTokenRange.lowerBound - 1
+            isCurrentAnchorVisible = false
+        }
+        let anchorIndex = transcriptMatchedTokenIndex
+        let searchStart = isCurrentAnchorVisible
+            ? max(visibleTokenRange.lowerBound, transcriptMatchedTokenIndex + 1)
+            : visibleTokenRange.lowerBound
+        let forwardRangeStart = isCurrentAnchorVisible ? anchorIndex + 1 : visibleTokenRange.lowerBound
+        let searchEnd = min(visibleTokenRange.upperBound, forwardRangeStart + transcriptMaxForwardLookingWords)
+        guard searchStart < searchEnd else {
+            guard transcriptMatchedTokenIndex >= 0 else { return (0, 0) }
+            return scriptProgress(at: transcriptMatchedTokenIndex, in: scriptTokens)
+        }
+
+        var matchedIndex = anchorIndex
+        var matchedTranscriptEnd = transcriptConsumedTokenCount
+        let overlap = transcriptMatchedTokenIndex < 0 || !isCurrentAnchorVisible ? 0 : 2
+        let transcriptSearchStart = max(0, transcriptConsumedTokenCount - overlap)
+
+        for transcriptStart in transcriptSearchStart..<transcriptTokens.count {
+            for scriptStart in searchStart..<searchEnd where scriptTokens[scriptStart].text == transcriptTokens[transcriptStart] {
+                var runLength = 0
+                while transcriptStart + runLength < transcriptTokens.count,
+                      scriptStart + runLength < scriptTokens.count,
+                      scriptTokens[scriptStart + runLength].text == transcriptTokens[transcriptStart + runLength] {
+                    runLength += 1
+                }
+
+                let transcriptEnd = transcriptStart + runLength
+                guard runLength >= transcriptMatchConsecutiveWords, transcriptEnd > transcriptConsumedTokenCount else { continue }
+                let cappedIndex = min(scriptStart + runLength - 1, searchEnd - 1)
+                guard cappedIndex > matchedIndex else { continue }
+                matchedIndex = cappedIndex
+                matchedTranscriptEnd = transcriptEnd
+                break
+            }
+            if matchedIndex > anchorIndex {
+                break
+            }
+        }
+
+        guard matchedIndex >= 0 else { return (0, 0) }
+        transcriptMatchedTokenIndex = matchedIndex
+        transcriptConsumedTokenCount = max(transcriptConsumedTokenCount, matchedTranscriptEnd)
+        return scriptProgress(at: matchedIndex, in: scriptTokens)
+    }
+
+    private func visibleTokenRange(in scriptTokens: [ScriptTokenInfo]) -> Range<Int> {
+        guard !scriptTokens.isEmpty else { return 0..<0 }
+        let lower = scriptTokens.firstIndex { $0.range.upperBound > transcriptVisibleUTF16Range.lowerBound } ?? scriptTokens.count
+        let upper = scriptTokens.firstIndex { $0.range.lowerBound >= transcriptVisibleUTF16Range.upperBound } ?? scriptTokens.count
+        return lower..<max(lower, upper)
+    }
+
+    private func scriptProgress(at matchedIndex: Int, in scriptTokens: [ScriptTokenInfo]) -> (lineCompletedFraction: Double, spokenCharacterEnd: Int) {
+        let spokenEnd = scriptTokens[matchedIndex].range.upperBound
+        let lineEndOffsets = lineEndOffsets(in: script)
+        let currentLine = scriptTokens[matchedIndex].lineIndex
+        let isLastScriptToken = matchedIndex == scriptTokens.count - 1
+        let completedLine = isLastScriptToken ? currentLine : currentLine - 1
+        let completedOffset = completedLine >= 0 && completedLine < lineEndOffsets.count ? lineEndOffsets[completedLine] : 0
+        let fraction = script.utf16.isEmpty ? 0 : Double(completedOffset) / Double(script.utf16.count)
+        return (min(max(fraction, 0), 1), min(max(spokenEnd, 0), script.utf16.count))
+    }
+
+    private var promptViewportHeight: CGFloat {
+        max(viewportHeight - promptTopPadding - promptBottomPadding, 1)
+    }
+
+    private var promptTopPadding: CGFloat {
+        12
+    }
+
+    private var promptBottomPadding: CGFloat {
+        12
+    }
+
+    private var promptMeasurementTextWidth: CGFloat {
+        max(promptTextWidth, 1)
+    }
+
+    private var promptLineHeight: CGFloat {
+        max(fontSize * 1.35, 1)
+    }
+
+    private func renderedPromptHeight(upToUTF16Offset utf16Offset: Int) -> CGFloat {
+        let nsScript = script as NSString
+        let clampedOffset = min(max(utf16Offset, 0), nsScript.length)
+        guard clampedOffset > 0 else { return 0 }
+
+        let prefix = nsScript.substring(with: NSRange(location: 0, length: clampedOffset)) as NSString
+        let style = NSMutableParagraphStyle()
+        style.lineSpacing = fontSize * 0.35
+        style.alignment = .left
+        style.lineBreakMode = .byWordWrapping
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: roundedPromptFont(ofSize: fontSize, weight: .regular),
+            .paragraphStyle: style
+        ]
+        let rect = prefix.boundingRect(
+            with: CGSize(width: promptMeasurementTextWidth, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: attributes,
+            context: nil
         )
+        return ceil(rect.height)
     }
 
-    private func resizeHandle(in availableSize: CGSize) -> some View {
-        Image(systemName: "arrow.down.right.and.arrow.up.left")
-            .font(.system(size: 15, weight: .semibold))
-            .foregroundStyle(.white)
-            .frame(width: 44, height: 44)
-            .background(.black.opacity(0.48), in: Circle())
-            .padding(10)
-            .accessibilityLabel("Resize prompt window")
-            .accessibilityIdentifier("resizeHandle")
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { value in
-                        let start = resizeStartFractions ?? CGSize(
-                            width: promptWidthFraction,
-                            height: promptHeightFraction
-                        )
-                        resizeStartFractions = start
-
-                        promptWidthFraction = clamp(
-                            start.width + value.translation.width / max(availableSize.width, 1),
-                            min: 0.48,
-                            max: 0.98
-                        )
-                        promptHeightFraction = clamp(
-                            start.height + value.translation.height / max(availableSize.height, 1),
-                            min: 0.36,
-                            max: 0.94
-                        )
-                    }
-                    .onEnded { _ in
-                        resizeStartFractions = nil
-                        clampScroll()
-                    }
-            )
+    private func roundedPromptFont(ofSize fontSize: CGFloat, weight: UIFont.Weight) -> UIFont {
+        let systemFont = UIFont.systemFont(ofSize: fontSize, weight: weight)
+        let descriptor = systemFont.fontDescriptor.withDesign(.rounded) ?? systemFont.fontDescriptor
+        return UIFont(descriptor: descriptor, size: fontSize)
     }
 
-    private func clamp(_ value: CGFloat, min minimum: CGFloat, max maximum: CGFloat) -> CGFloat {
-        Swift.min(Swift.max(value, minimum), maximum)
+    private func currentVisibleUTF16Range() -> Range<Int> {
+        let textLength = (script as NSString).length
+        guard textLength > 0 else { return 0..<0 }
+        let visibleTop = max(0, scrollOffset)
+        let visibleBottom = min(max(visibleTop + promptViewportHeight, visibleTop), max(renderedPromptHeight(upToUTF16Offset: textLength), 1))
+        let lower = utf16Offset(forRenderedHeight: visibleTop, upperBound: textLength)
+        let upper = utf16Offset(forRenderedHeight: visibleBottom, upperBound: textLength)
+        return min(lower, upper)..<max(lower, upper)
     }
 
-    private var promptWidthBinding: Binding<Double> {
-        Binding(
-            get: { Double(promptWidthFraction * 100) },
-            set: { promptWidthFraction = CGFloat($0 / 100) }
-        )
-    }
-
-    private var promptHeightBinding: Binding<Double> {
-        Binding(
-            get: { Double(promptHeightFraction * 100) },
-            set: { promptHeightFraction = CGFloat($0 / 100) }
-        )
-    }
-
-    private var pipContentSize: CGSize {
-        CGSize(width: pipWidth, height: pipHeight)
-    }
-
-    private var pictureInPictureStatusText: String {
-        if let message = pictureInPictureController.statusMessage {
-            return message
+    private func utf16Offset(forRenderedHeight targetHeight: CGFloat, upperBound: Int) -> Int {
+        guard targetHeight > 0 else { return 0 }
+        var low = 0
+        var high = upperBound
+        while low < high {
+            let mid = (low + high) / 2
+            if renderedPromptHeight(upToUTF16Offset: mid) < targetHeight {
+                low = mid + 1
+            } else {
+                high = mid
+            }
         }
-        if pictureInPictureController.isActive {
-            return "Picture in Picture is active"
+        return low
+    }
+
+    private func updateRecognizedTranscriptDisplayLine(from transcript: String) {
+        let delta: String
+        if transcript.hasPrefix(previousRecognizedTranscript) {
+            delta = String(transcript.dropFirst(previousRecognizedTranscript.count))
+        } else {
+            recognizedTranscriptDisplayLine = ""
+            delta = transcript
         }
-        if pictureInPictureController.isSupported {
-            return "Opening Picture in Picture"
+        previousRecognizedTranscript = transcript
+
+        let maxCharacters = max(10, Int(promptMeasurementTextWidth / max(fontSize * 0.32, 8)))
+        for chunk in transcriptDisplayChunks(from: delta) {
+            guard !chunk.isEmpty else { continue }
+            let separator = recognizedTranscriptDisplayLine.isEmpty || chunk.count == 1 ? "" : " "
+            let candidate = recognizedTranscriptDisplayLine + separator + chunk
+            if candidate.count > maxCharacters {
+                recognizedTranscriptDisplayLine = chunk.count > maxCharacters ? String(chunk.suffix(maxCharacters)) : chunk
+            } else {
+                recognizedTranscriptDisplayLine = candidate
+            }
         }
-        return "Picture in Picture is not available on this device"
+    }
+
+    private func transcriptDisplayChunks(from text: String) -> [String] {
+        var chunks: [String] = []
+        var current = ""
+        for scalar in text.unicodeScalars {
+            let value = String(scalar)
+            if scalar.isCJKToken {
+                if !current.isEmpty {
+                    chunks.append(current)
+                    current = ""
+                }
+                chunks.append(value)
+            } else if scalar.properties.isWhitespace || CharacterSet.newlines.contains(scalar) {
+                if !current.isEmpty {
+                    chunks.append(current)
+                    current = ""
+                }
+            } else if scalar.isPromptWordToken {
+                current.append(value)
+            } else if !current.isEmpty {
+                chunks.append(current)
+                current = ""
+            }
+        }
+        if !current.isEmpty {
+            chunks.append(current)
+        }
+        return chunks
+    }
+
+    private func normalizedTokens(_ text: String) -> [String] {
+        scriptTokenInfos(in: text).map(\.text)
+    }
+
+    private struct ScriptTokenInfo {
+        let text: String
+        let range: Range<Int>
+        let lineIndex: Int
+    }
+
+    private func scriptTokenInfos(in text: String) -> [ScriptTokenInfo] {
+        let lineStarts = lineStartOffsets(in: text)
+        var tokens: [ScriptTokenInfo] = []
+        var current = ""
+        var currentStart: Int?
+        var offset = 0
+
+        func flushCurrent(endingAt endOffset: Int) {
+            guard let start = currentStart, !current.isEmpty else {
+                current = ""
+                currentStart = nil
+                return
+            }
+            let lineIndex = max(0, lineStarts.lastIndex(where: { $0 <= start }) ?? 0)
+            tokens.append(ScriptTokenInfo(
+                text: current.lowercased(),
+                range: start..<endOffset,
+                lineIndex: lineIndex
+            ))
+            current = ""
+            currentStart = nil
+        }
+
+        for scalar in text.unicodeScalars {
+            let scalarText = String(scalar)
+            let scalarLength = scalarText.utf16.count
+            let start = offset
+            let end = offset + scalarLength
+
+            if scalar.isCJKToken {
+                flushCurrent(endingAt: start)
+                let lineIndex = max(0, lineStarts.lastIndex(where: { $0 <= start }) ?? 0)
+                tokens.append(ScriptTokenInfo(text: scalarText.lowercased(), range: start..<end, lineIndex: lineIndex))
+            } else if scalar.isPromptWordToken {
+                if currentStart == nil {
+                    currentStart = start
+                }
+                current.append(scalarText)
+            } else {
+                flushCurrent(endingAt: start)
+            }
+            offset = end
+        }
+
+        flushCurrent(endingAt: offset)
+        return tokens
+    }
+
+    private func lineStartOffsets(in text: String) -> [Int] {
+        var starts = [0]
+        var offset = 0
+        for scalar in text.unicodeScalars {
+            offset += String(scalar).utf16.count
+            if scalar == "\n" {
+                starts.append(offset)
+            }
+        }
+        return starts
+    }
+
+    private func lineEndOffsets(in text: String) -> [Int] {
+        var ends: [Int] = []
+        var offset = 0
+        var lineEnd = 0
+        for scalar in text.unicodeScalars {
+            if scalar == "\n" {
+                ends.append(lineEnd)
+            }
+            offset += String(scalar).utf16.count
+            lineEnd = offset
+        }
+        ends.append(lineEnd)
+        return ends
     }
 
     private var appVersionText: String {
-        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.1"
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0.11"
         return "V\(version)"
     }
 
-    private var pictureInPictureConfiguration: PictureInPicturePromptConfiguration {
-        PictureInPicturePromptConfiguration(
-            script: script,
-            fontSize: fontSize,
-            opacity: opacity,
-            scrollOffset: scrollOffset,
-            isRunning: isRunning,
-            preferredContentSize: pipContentSize
+    private var scriptWordCount: Int {
+        script
+            .split { !$0.isLetter && !$0.isNumber && $0 != "'" }
+            .count
+    }
+
+    private var scrollMode: IOSScrollMode {
+        IOSScrollMode(rawValue: scrollModeRaw) ?? .infinite
+    }
+
+    private var scrollModeBinding: Binding<IOSScrollMode> {
+        Binding(
+            get: { scrollMode },
+            set: { scrollModeRaw = $0.rawValue }
         )
     }
 
-    private var pictureInPictureActions: PictureInPicturePromptActions {
-        PictureInPicturePromptActions(
-            togglePlayback: {
-                togglePlayback()
-            },
-            toggleContentPlayback: {
-                guard clickContentTogglesPlayback else { return }
-                togglePlayback()
-            },
-            jumpBackward: { tapCount in
-                jump(seconds: -paceSeconds * Double(tapCount))
-            },
-            jumpForward: { tapCount in
-                jump(seconds: paceSeconds * Double(tapCount))
-            },
-            reset: {
-                resetScroll()
-            },
-            openSettings: {
-                openSettingsFromPictureInPicture()
-            }
+    private var countdownBehavior: IOSCountdownBehavior {
+        IOSCountdownBehavior(rawValue: countdownBehaviorRaw) ?? .freshStartOnly
+    }
+
+    private var countdownBehaviorBinding: Binding<IOSCountdownBehavior> {
+        Binding(
+            get: { countdownBehavior },
+            set: { countdownBehaviorRaw = $0.rawValue }
         )
     }
 
-    private func openSettingsFromPictureInPicture() {
-        isScriptFocused = false
-        isReturningToSettings = true
-        shouldHideAppWhenPictureInPictureStarts = false
-        stopPlayback()
-        pictureInPictureController.stop()
-        if let url = URL(string: "pcompanion://settings") {
-            UIApplication.shared.open(url)
-        }
-    }
-
-    private func handlePictureInPictureDidStart() {
-        guard shouldHideAppWhenPictureInPictureStarts else { return }
-        shouldHideAppWhenPictureInPictureStarts = false
-        hideForegroundAppForPresentation()
-    }
-
-    private func handlePictureInPictureDidStop() {
-        guard isReturningToSettings else { return }
-        isReturningToSettings = false
-    }
-
-    private func hideForegroundAppForPresentation() {
-        Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 150_000_000)
-            UIApplication.shared.sendAction(
-                NSSelectorFromString("suspend"),
-                to: UIApplication.shared,
-                from: nil,
-                for: nil
-            )
+    private func handleAppBecameActive() {
+        presentationLog("handleAppBecameActive presentationMode=\(isPresentationModeActive)")
+        if isPresentationModeActive {
+            shouldShowSettingsSurface = false
+        } else {
+            shouldShowSettingsSurface = true
         }
     }
 }
 
-private struct KeyboardDismissOnOutsideInput: UIViewRepresentable {
-    let dismiss: () -> Void
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator(dismiss: dismiss)
+private extension UnicodeScalar {
+    var isPromptWordToken: Bool {
+        CharacterSet.letters.contains(self) ||
+        CharacterSet.decimalDigits.contains(self) ||
+        self == "'"
     }
 
-    func makeUIView(context: Context) -> UIView {
-        let view = UIView()
-        view.isUserInteractionEnabled = false
-        return view
-    }
-
-    func updateUIView(_ uiView: UIView, context: Context) {
-        context.coordinator.dismiss = dismiss
-        DispatchQueue.main.async {
-            context.coordinator.installIfNeeded(from: uiView)
-        }
-    }
-
-    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
-        var dismiss: () -> Void
-        private weak var installedWindow: UIWindow?
-        private weak var recognizer: UITapGestureRecognizer?
-
-        init(dismiss: @escaping () -> Void) {
-            self.dismiss = dismiss
-        }
-
-        deinit {
-            if let recognizer, let installedWindow {
-                installedWindow.removeGestureRecognizer(recognizer)
-            }
-        }
-
-        func installIfNeeded(from view: UIView) {
-            guard let window = view.window, installedWindow !== window else { return }
-
-            if let recognizer, let installedWindow {
-                installedWindow.removeGestureRecognizer(recognizer)
-            }
-
-            let recognizer = UITapGestureRecognizer(target: self, action: #selector(handleTap(_:)))
-            recognizer.cancelsTouchesInView = false
-            recognizer.delegate = self
-            window.addGestureRecognizer(recognizer)
-            installedWindow = window
-            self.recognizer = recognizer
-        }
-
-        @objc private func handleTap(_ recognizer: UITapGestureRecognizer) {
-            dismiss()
-        }
-
-        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
-            var view = touch.view
-            while let current = view {
-                if current is UITextView {
-                    return false
-                }
-                view = current.superview
-            }
+    var isCJKToken: Bool {
+        switch value {
+        case 0x3400...0x4DBF,
+             0x4E00...0x9FFF,
+             0xF900...0xFAFF,
+             0x20000...0x2A6DF,
+             0x2A700...0x2B73F,
+             0x2B740...0x2B81F,
+             0x2B820...0x2CEAF,
+             0x3040...0x309F,
+             0x30A0...0x30FF,
+             0xAC00...0xD7AF:
             return true
-        }
-
-        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
-            true
-        }
-    }
-}
-
-private enum TapZone {
-    case left
-    case center
-    case right
-}
-
-private struct TapZoneView: UIViewRepresentable {
-    let onTap: (TapZone, Int) -> Void
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator(onTap: onTap)
-    }
-
-    func makeUIView(context: Context) -> UIView {
-        let view = UIView()
-        view.backgroundColor = .clear
-        view.isAccessibilityElement = false
-        view.accessibilityElementsHidden = true
-
-        let singleTap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleSingleTap(_:)))
-        singleTap.numberOfTapsRequired = 1
-
-        let doubleTap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleDoubleTap(_:)))
-        doubleTap.numberOfTapsRequired = 2
-
-        singleTap.require(toFail: doubleTap)
-        view.addGestureRecognizer(singleTap)
-        view.addGestureRecognizer(doubleTap)
-
-        return view
-    }
-
-    func updateUIView(_ uiView: UIView, context: Context) {
-        context.coordinator.onTap = onTap
-    }
-
-    final class Coordinator: NSObject {
-        var onTap: (TapZone, Int) -> Void
-
-        init(onTap: @escaping (TapZone, Int) -> Void) {
-            self.onTap = onTap
-        }
-
-        @objc func handleSingleTap(_ recognizer: UITapGestureRecognizer) {
-            handle(recognizer, tapCount: 1)
-        }
-
-        @objc func handleDoubleTap(_ recognizer: UITapGestureRecognizer) {
-            handle(recognizer, tapCount: 2)
-        }
-
-        private func handle(_ recognizer: UITapGestureRecognizer, tapCount: Int) {
-            guard let view = recognizer.view else { return }
-            let x = recognizer.location(in: view).x
-            let third = view.bounds.width / 3
-
-            if x < third {
-                onTap(.left, tapCount)
-            } else if x > third * 2 {
-                onTap(.right, tapCount)
-            } else {
-                onTap(.center, 1)
-            }
+        default:
+            return false
         }
     }
 }

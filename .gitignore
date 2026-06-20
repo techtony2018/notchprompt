@@ -13,6 +13,7 @@ build/
 DerivedData/
 dist/*.zip
 dist/*.dmg
+.PCompanion.version.fingerprint
 
 ## Non-Apple files
 .DS_Store

@@ -98,6 +98,7 @@
 				B0503AF72F39940800CD83D8 /* Sources */,
 				B0503AF82F39940800CD83D8 /* Frameworks */,
 				B0503AF92F39940800CD83D8 /* Resources */,
+				B0503B092F39940900CD83D8 /* Stamp Build Version */,
 			);
 			buildRules = (
 			);
@@ -120,6 +121,7 @@
 				C0A000000000000000000005 /* Sources */,
 				C0A000000000000000000003 /* Frameworks */,
 				C0A000000000000000000004 /* Resources */,
+				C0A00000000000000000000D /* Stamp Build Version */,
 			);
 			buildRules = (
 			);
@@ -234,6 +236,47 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		B0503B092F39940900CD83D8 /* Stamp Build Version */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Stamp Build Version";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "\"${SRCROOT}/scripts/stamp_version.sh\"\n";
+		};
+		C0A00000000000000000000D /* Stamp Build Version */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Stamp Build Version";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "\"${SRCROOT}/scripts/stamp_version.sh\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		B0503AF72F39940800CD83D8 /* Sources */ = {
@@ -401,26 +444,28 @@
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 3;
+				CURRENT_PROJECT_VERSION = 1.0.59;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = 337RL45QSK;
 				ENABLE_AUDIO_INPUT = YES;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				ENABLE_USER_SELECTED_FILES = readwrite;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = PCompanion;
+				INFOPLIST_KEY_CFBundleDisplayName = "Presentation Companion";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
-				INFOPLIST_KEY_NSMicrophoneUsageDescription = "PCompanion uses the local microphone to pause scrolling when you stop speaking and resume when you continue.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Presentation Companion uses the local microphone to pause scrolling when you stop speaking and resume when you continue.";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Presentation Companion uses speech recognition to estimate where you are in the presentation script and keep the prompt aligned with your progress.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 1.1;
+				MARKETING_VERSION = 1.0.59;
 				PRODUCT_BUNDLE_IDENTIFIER = notch.notchprompt;
-				PRODUCT_NAME = PCompanion;
+				PRODUCT_NAME = "Presentation Companion";
 				REGISTER_APP_GROUPS = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -437,26 +482,28 @@
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 3;
+				CURRENT_PROJECT_VERSION = 1.0.59;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = 337RL45QSK;
 				ENABLE_AUDIO_INPUT = YES;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				ENABLE_USER_SELECTED_FILES = readwrite;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = PCompanion;
+				INFOPLIST_KEY_CFBundleDisplayName = "Presentation Companion";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
-				INFOPLIST_KEY_NSMicrophoneUsageDescription = "PCompanion uses the local microphone to pause scrolling when you stop speaking and resume when you continue.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Presentation Companion uses the local microphone to pause scrolling when you stop speaking and resume when you continue.";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Presentation Companion uses speech recognition to estimate where you are in the presentation script and keep the prompt aligned with your progress.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 1.1;
+				MARKETING_VERSION = 1.0.59;
 				PRODUCT_BUNDLE_IDENTIFIER = notch.notchprompt;
-				PRODUCT_NAME = PCompanion;
+				PRODUCT_NAME = "Presentation Companion";
 				REGISTER_APP_GROUPS = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -470,9 +517,10 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 3;
+				CURRENT_PROJECT_VERSION = 1.0.59;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = 4UUBLF8F8U;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = notchpromptiOS/Info.plist;
@@ -481,9 +529,9 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.1;
+				MARKETING_VERSION = 1.0.59;
 				PRODUCT_BUNDLE_IDENTIFIER = "notch.presentation-companion";
-				PRODUCT_NAME = PCompanion;
+				PRODUCT_NAME = "Presentation Companion";
 				SDKROOT = iphoneos;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;
@@ -500,9 +548,10 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 3;
+				CURRENT_PROJECT_VERSION = 1.0.59;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = 4UUBLF8F8U;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = notchpromptiOS/Info.plist;
@@ -511,9 +560,9 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.1;
+				MARKETING_VERSION = 1.0.59;
 				PRODUCT_BUNDLE_IDENTIFIER = "notch.presentation-companion";
-				PRODUCT_NAME = PCompanion;
+				PRODUCT_NAME = "Presentation Companion";
 				SDKROOT = iphoneos;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;
@@ -530,7 +579,7 @@
 			buildSettings = {
 				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 3;
+				CURRENT_PROJECT_VERSION = 1.0.59;
 				DEVELOPMENT_TEAM = 4UUBLF8F8U;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
@@ -539,7 +588,7 @@
 					"@executable_path/Frameworks",
 					"@loader_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.1;
+				MARKETING_VERSION = 1.0.59;
 				PRODUCT_BUNDLE_IDENTIFIER = "notch.presentation-companion.ui-tests";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
@@ -555,7 +604,7 @@
 			buildSettings = {
 				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 3;
+				CURRENT_PROJECT_VERSION = 1.0.59;
 				DEVELOPMENT_TEAM = 4UUBLF8F8U;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
@@ -564,7 +613,7 @@
 					"@executable_path/Frameworks",
 					"@loader_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.1;
+				MARKETING_VERSION = 1.0.59;
 				PRODUCT_BUNDLE_IDENTIFIER = "notch.presentation-companion.ui-tests";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
