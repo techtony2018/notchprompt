@@ -333,15 +333,11 @@ final class IOSLocalMicrophoneVoiceMonitor: ObservableObject {
         let activationThresholdDb = Float(voiceDetectionThresholdDb)
 
         if db >= activationThresholdDb {
-            if voiceStartDate == nil {
-                voiceStartDate = now
-            }
+            voiceStartDate = voiceStartDate ?? now
             lastVoiceDate = now
             trackSpeakingPeak(db: db, at: now)
 
-            if !currentVoiceActive,
-               let voiceStartDate,
-               now.timeIntervalSince(voiceStartDate) >= activationDuration {
+            if !currentVoiceActive {
                 setVoiceActive(true)
             }
             return

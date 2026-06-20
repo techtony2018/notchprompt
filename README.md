@@ -37,6 +37,7 @@ with the same core playback and voice controls.
 - Transcript speech recognition chooses a supported recognition language from the script text, and Settings lets you override the recognition language manually.
 - Configurable voice detection threshold from `-70 dB` to `20 dB`, defaulting to `-30 dB`.
 - Live recognized transcript words are shown in blue at the bottom of the prompt window. The language or voice status stays in a fixed status area so it does not shift the prompt text.
+- In voice or transcript mode, fresh playback waits for speech before moving the prompt. Manual pause blocks voice/transcript-driven resume until the presenter explicitly resumes.
 - Version display in Settings.
 
 ### macOS
@@ -55,11 +56,12 @@ with the same core playback and voice controls.
 
 ### iOS
 
-- Settings is the landing window; `Present` switches immediately into full-screen prompting.
+- Settings is the landing window; a floating `Present` button switches immediately into full-screen prompting.
 - Native iOS Presentation Script editor supports normal editing, keyboard input, select all, copy, and paste. Tapping the title or using the keyboard Done control hides the keyboard.
 - Full-screen prompt mode reserves top control space and a bottom status line, so prompt text does not overlap controls or recognition status in portrait or landscape.
 - Prompt screen taps mirror the macOS click zones: left third jumps back, middle pauses/resumes, and right third jumps forward. Back and forward controls move by the configured line pace; double taps move twice that pace.
 - Standalone prompt controls include play/pause, reset, back, forward, settings, paste, clear, and close.
+- Manual pause fades the script and shows `Presentation paused, click Play again to resume` with a play icon.
 - Voice level is shown directly in the prompt as `Voice: xx dB` when voice pause/resume is enabled.
 - When voice-driven pause/resume is enabled, a fresh start waits after countdown and shows `Start talking to move prompt forward`.
 - App settings are persisted on device.
@@ -73,7 +75,7 @@ with the same core playback and voice controls.
 
 ## Version
 
-Current version: V1.0.59.
+Current version: V1.0.88.
 
 ## Install (Recommended)
 

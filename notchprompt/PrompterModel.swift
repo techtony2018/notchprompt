@@ -96,6 +96,8 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
     @Published private(set) var jumpBackDistancePoints: CGFloat = 0
     @Published private(set) var manualScrollToken: UUID = UUID()
     @Published private(set) var manualScrollDeltaPoints: CGFloat = 0
+    @Published private(set) var isManuallyPaused: Bool = false
+    @Published private(set) var isWaitingForMicStart: Bool = false
     private(set) var savedScrollPhaseForResume: CGFloat?
 
     private var countdownTask: Task<Void, Never>?
@@ -176,6 +178,22 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
         Self.transcriptLanguageLabel(for: effectiveTranscriptLanguageIdentifier)
     }
 
+    var voiceAutoPauseStatusText: String {
+        isVoiceAutoPauseTalking ? "talking" : "paused, talk to continue"
+    }
+
+    var promptControlShowsPause: Bool {
+        !isManuallyPaused && (isRunning || isCountingDown || isWaitingForMicStart)
+    }
+
+    var isVoiceAutoPauseTalking: Bool {
+        voiceInputLevelDb >= voiceDetectionThresholdDb
+    }
+
+    private var shouldWaitForMicInputOnStart: Bool {
+        autoPauseResumeWithLocalMic || transcriptBasedPrompt
+    }
+
     static func transcriptLanguageLabel(for identifier: String) -> String {
         if let option = transcriptLanguageOptions.first(where: { $0.id == identifier }) {
             return option.label
@@ -236,12 +254,15 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
         didReachEndInStopMode = false
         shouldUseCountdownOnNextStart = true
         savedScrollPhaseForResume = nil
+        isManuallyPaused = false
         resetToken = UUID()
     }
 
     func resetToFreshStart() {
         stop()
         manualScrollEnabled = false
+        isManuallyPaused = false
+        isWaitingForMicStart = false
         isPausedByVoiceMonitor = false
         isVoiceResumeBlockedByMousePause = false
         didReachEndInStopMode = false
@@ -291,7 +312,7 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
     }
 
     func switchPlaybackModeFromOverlayControl() {
-        if isRunning || isCountingDown {
+        if promptControlShowsPause {
             pauseFromMouseInteraction()
             manualScrollEnabled = true
             didReachEndInStopMode = false
@@ -313,6 +334,8 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
         guard autoPauseResumeWithLocalMic, isRunning || isCountingDown else { return }
         stop()
         isPausedByVoiceMonitor = true
+        isManuallyPaused = false
+        isWaitingForMicStart = false
         manualScrollEnabled = false
     }
 
@@ -335,6 +358,8 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
 
         if isRunning || isCountingDown {
             stop()
+            isManuallyPaused = false
+            isWaitingForMicStart = false
         }
 
         didReachEndInStopMode = false
@@ -345,8 +370,9 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
     }
 
     func toggleRunning() {
-        if isRunning || isCountingDown {
+        if promptControlShowsPause {
             stop()
+            isManuallyPaused = true
         } else {
             start()
         }
@@ -357,6 +383,7 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
             return
         }
 
+        isManuallyPaused = false
         isPausedByVoiceMonitor = false
         manualScrollEnabled = false
 
@@ -377,7 +404,11 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
         }
         
         guard shouldRunCountdown else {
-            beginRunningNow()
+            if shouldWaitForMicInputOnStart {
+                beginWaitingForMicStart()
+            } else {
+                beginRunningNow()
+            }
             return
         }
         
@@ -421,6 +452,7 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
         isCountingDown = false
         countdownRemaining = 0
         isRunning = false
+        isWaitingForMicStart = false
     }
 
     func setVoiceMonitorUnavailable(_ message: String?) {
@@ -874,8 +906,29 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
             }
 
             guard !Task.isCancelled else { return }
-            beginRunningNow()
+            if shouldWaitForMicInputOnStart {
+                beginWaitingForMicStart()
+            } else {
+                beginRunningNow()
+            }
             countdownTask = nil
+        }
+    }
+
+    private func beginWaitingForMicStart() {
+        countdownTask?.cancel()
+        countdownTask = nil
+        isCountingDown = false
+        countdownRemaining = 0
+        hasStartedSession = true
+        shouldUseCountdownOnNextStart = false
+        isRunning = false
+        manualScrollEnabled = false
+        isManuallyPaused = false
+        isWaitingForMicStart = true
+        isVoiceResumeBlockedByMousePause = false
+        if autoPauseResumeWithLocalMic {
+            isPausedByVoiceMonitor = true
         }
     }
     
@@ -884,6 +937,8 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
         countdownRemaining = 0
         hasStartedSession = true
         shouldUseCountdownOnNextStart = false
+        isWaitingForMicStart = false
+        isManuallyPaused = false
         isRunning = true
     }
 
@@ -895,11 +950,13 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
         hasStartedSession = true
         shouldUseCountdownOnNextStart = false
         manualScrollEnabled = false
+        isWaitingForMicStart = false
+        isManuallyPaused = false
         isRunning = true
     }
 
     private func toggleFromMouseInteraction() {
-        if isRunning || isCountingDown {
+        if promptControlShowsPause {
             pauseFromMouseInteraction()
         } else {
             resumeFromMouseInteraction()
@@ -908,11 +965,14 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
 
     private func pauseFromMouseInteraction() {
         stop()
+        isManuallyPaused = true
+        isWaitingForMicStart = false
         isPausedByVoiceMonitor = false
         isVoiceResumeBlockedByMousePause = true
     }
 
     private func resumeFromMouseInteraction() {
+        isManuallyPaused = false
         isVoiceResumeBlockedByMousePause = false
         start()
     }

@@ -154,6 +154,7 @@ struct OverlayView: View {
             .padding(.horizontal, 18)
             .padding(.top, 40)
             .padding(.bottom, 44)
+            .opacity(model.isManuallyPaused ? 0.28 : 1)
             .clipShape(Rectangle())
             .overlay {
                 TrackpadScrollCaptureView(
@@ -164,18 +165,23 @@ struct OverlayView: View {
                         model.handleContentClick(horizontalFraction: horizontalFraction, clickCount: clickCount)
                     }
                 )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
 
             if shouldShowBottomStatusLine {
                 bottomStatusLine
             }
 
+            if model.isManuallyPaused {
+                promptInfoCard(symbol: "play.fill", text: "Presentation paused, click Play again to resume")
+            }
+
             if !model.isCountingDown {
                 HStack {
                     HStack(spacing: 6) {
                         OverlayControlButton(
-                            symbol: (model.isRunning || model.isCountingDown) ? "hand.draw.fill" : "play.fill",
-                            tooltip: (model.isRunning || model.isCountingDown) ? "Pause and switch to manual trackpad scroll" : "Start auto scroll",
+                            symbol: model.promptControlShowsPause ? "hand.draw.fill" : "play.fill",
+                            tooltip: model.promptControlShowsPause ? "Pause and switch to manual trackpad scroll" : "Start auto scroll",
                             onTooltipChange: setTooltip
                         ) {
                             model.switchPlaybackModeFromOverlayControl()
@@ -296,18 +302,9 @@ struct OverlayView: View {
             Spacer()
             HStack(spacing: 10) {
                 statusLeadingLabel
-                    .frame(width: 150, alignment: .leading)
+                    .frame(width: model.autoPauseResumeWithLocalMic ? 82 : 108, alignment: .leading)
 
-                if model.transcriptBasedPrompt {
-                    Text(model.recognizedTranscriptDisplayLine)
-                        .font(.system(size: max(11, model.fontSize * 0.58), weight: .medium))
-                        .foregroundStyle(.blue)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                } else {
-                    Spacer(minLength: 0)
-                }
+                unifiedStatusArea
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 5)
@@ -317,17 +314,62 @@ struct OverlayView: View {
         }
     }
 
+    private func promptInfoCard(symbol: String, text: String) -> some View {
+        VStack(spacing: 10) {
+            Image(systemName: symbol)
+                .font(.system(size: 30, weight: .semibold))
+            Text(text)
+                .font(.system(size: 14, weight: .semibold))
+                .multilineTextAlignment(.center)
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 20)
+        .padding(.vertical, 16)
+        .background(Color.black.opacity(0.72), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(Color.white.opacity(0.16), lineWidth: 1)
+        )
+        .padding(.horizontal, 28)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+        .allowsHitTesting(false)
+    }
+
+    @ViewBuilder
+    private var unifiedStatusArea: some View {
+        if model.autoPauseResumeWithLocalMic {
+            unifiedStatusText(
+                model.voiceAutoPauseStatusText,
+                color: model.isVoiceAutoPauseTalking ? .blue : .red,
+                weight: .semibold
+            )
+        } else if model.transcriptBasedPrompt {
+            unifiedStatusText(model.recognizedTranscriptDisplayLine, color: .blue, weight: .medium)
+        } else {
+            Spacer(minLength: 0)
+        }
+    }
+
+    private func unifiedStatusText(_ text: String, color: Color, weight: Font.Weight) -> some View {
+        Text(text)
+            .font(.system(size: max(11, model.fontSize * 0.58), weight: weight))
+            .foregroundStyle(color)
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
     @ViewBuilder
     private var statusLeadingLabel: some View {
         if model.autoPauseResumeWithLocalMic {
-            HStack(spacing: 3) {
+            HStack(spacing: 4) {
                 Text("Voice:")
                     .foregroundStyle(.white.opacity(0.72))
                 Text("\(Int(model.voiceInputLevelDb.rounded())) dB")
-                    .foregroundStyle(.red)
+                    .foregroundStyle(model.isVoiceAutoPauseTalking ? .blue : .gray)
+                    .monospacedDigit()
             }
             .font(.system(size: 10, weight: .semibold))
-            .monospacedDigit()
             .lineLimit(1)
         } else if model.transcriptBasedPrompt {
             Menu {
@@ -567,6 +609,10 @@ final class ScrollCaptureNSView: NSView {
     }
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        bounds.contains(point) ? self : nil
+    }
 
     override func mouseDown(with event: NSEvent) {
         let location = convert(event.locationInWindow, from: nil)

@@ -108,6 +108,7 @@ struct PresentationCompanionView: View {
     @State private var isPausedByVoiceMonitor = false
     @State private var isVoiceResumeBlockedByManualPause = false
     @State private var isWaitingForVoiceStart = false
+    @State private var isManuallyPaused = false
     @State private var transcriptSpokenCharacterEnd = 0
     @State private var transcriptMatchedTokenIndex = -1
     @State private var transcriptConsumedTokenCount = 0
@@ -269,23 +270,31 @@ struct PresentationCompanionView: View {
                     .foregroundStyle(.white)
             }
             .allowsHitTesting(false)
-        } else if isWaitingForVoiceStart {
-            VStack(spacing: 10) {
-                Image(systemName: "waveform")
-                    .font(.system(size: 34, weight: .semibold))
-                Text("Start talking to move prompt forward")
-                    .font(.headline)
-            }
-            .foregroundStyle(.white)
-            .padding(.horizontal, 22)
-            .padding(.vertical, 18)
-            .background(.black.opacity(0.72), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .stroke(.white.opacity(0.16), lineWidth: 1)
-            )
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+        } else if isManuallyPaused {
+            promptInfoCard(symbol: "play.fill", text: "Presentation paused, click Play again to resume")
+        } else if shouldShowVoiceStartTip {
+            promptInfoCard(symbol: "waveform", text: "Start talking to move prompt forward")
         }
+    }
+
+    private func promptInfoCard(symbol: String, text: String) -> some View {
+        VStack(spacing: 10) {
+            Image(systemName: symbol)
+                .font(.system(size: 34, weight: .semibold))
+            Text(text)
+                .font(.headline)
+                .multilineTextAlignment(.center)
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 22)
+        .padding(.vertical, 18)
+        .background(.black.opacity(0.72), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(.white.opacity(0.16), lineWidth: 1)
+        )
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+        .allowsHitTesting(false)
     }
 
     private var promptSurface: some View {
@@ -297,6 +306,7 @@ struct PresentationCompanionView: View {
                     .font(.system(size: fontSize, weight: .regular, design: .rounded))
                     .foregroundStyle(.white)
                     .lineSpacing(fontSize * 0.35)
+                    .opacity(isManuallyPaused ? 0.28 : 1)
                     .padding(.horizontal, 24)
                     .padding(.top, promptTopPadding)
                     .padding(.bottom, promptBottomPadding)
@@ -363,6 +373,13 @@ struct PresentationCompanionView: View {
         )
     }
 
+    private var shouldShowVoiceStartTip: Bool {
+        isWaitingForVoiceStart
+            && !isManuallyPaused
+            && !voiceMonitor.isVoiceActive
+            && Double(voiceMonitor.inputLevelDb) < voiceDetectionThresholdDb
+    }
+
     private var attributedPromptText: AttributedString {
         var attributed = AttributedString(script)
         let clampedEnd = min(max(transcriptBasedPrompt ? transcriptSpokenCharacterEnd : 0, 0), (script as NSString).length)
@@ -378,17 +395,8 @@ struct PresentationCompanionView: View {
         HStack(spacing: 8) {
             if autoPauseResumeWithLocalMic || transcriptBasedPrompt || !recognizedTranscriptDisplayLine.isEmpty {
                 statusLeadingLabel
-                    .frame(width: 128, alignment: .leading)
-                if transcriptBasedPrompt {
-                    Text(recognizedTranscriptDisplayLine)
-                        .foregroundStyle(.blue)
-                        .font(.system(size: max(12, fontSize * 0.45), weight: .medium))
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                } else {
-                    Spacer(minLength: 0)
-                }
+                    .frame(width: autoPauseResumeWithLocalMic ? 86 : 108, alignment: .leading)
+                unifiedStatusArea
             } else {
                 Spacer(minLength: 0)
             }
@@ -406,16 +414,40 @@ struct PresentationCompanionView: View {
     }
 
     @ViewBuilder
+    private var unifiedStatusArea: some View {
+        if autoPauseResumeWithLocalMic {
+            unifiedStatusText(
+                voiceMonitor.isVoiceActive ? "talking" : "paused, talk to continue",
+                color: voiceMonitor.isVoiceActive ? .blue : .red,
+                weight: .semibold
+            )
+        } else if transcriptBasedPrompt {
+            unifiedStatusText(recognizedTranscriptDisplayLine, color: .blue, weight: .medium)
+        } else {
+            Spacer(minLength: 0)
+        }
+    }
+
+    private func unifiedStatusText(_ text: String, color: Color, weight: Font.Weight) -> some View {
+        Text(text)
+            .foregroundStyle(color)
+            .font(.system(size: max(12, fontSize * 0.45), weight: weight))
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
     private var statusLeadingLabel: some View {
         if autoPauseResumeWithLocalMic {
-            HStack(spacing: 3) {
+            HStack(spacing: 4) {
                 Text("Voice:")
                     .foregroundStyle(.white.opacity(0.72))
                 Text("\(Int(voiceMonitor.inputLevelDb.rounded())) dB")
-                    .foregroundStyle(.red)
+                    .foregroundStyle(voiceMonitor.isVoiceActive ? .blue : .gray)
+                    .monospacedDigit()
             }
             .font(.system(size: 11, weight: .semibold))
-            .monospacedDigit()
             .lineLimit(1)
         } else if transcriptBasedPrompt {
             Text(transcriptLanguageLabel(for: effectiveTranscriptLanguageIdentifier))
@@ -432,14 +464,14 @@ struct PresentationCompanionView: View {
             Button {
                 togglePlayback()
             } label: {
-                Image(systemName: (isRunning || isCountingDown) ? "pause.fill" : "play.fill")
+                Image(systemName: promptControlShowsPause ? "pause.fill" : "play.fill")
                     .font(.headline)
                     .frame(width: 34, height: 34)
             }
             .buttonStyle(.plain)
             .foregroundStyle(.white)
             .background(.white.opacity(0.16), in: Circle())
-            .accessibilityLabel((isRunning || isCountingDown) ? "Pause Prompt" : "Start Prompt")
+            .accessibilityLabel(promptControlShowsPause ? "Pause Prompt" : "Start Prompt")
             .accessibilityIdentifier("playPauseButton")
             .layoutPriority(1)
 
@@ -594,17 +626,6 @@ struct PresentationCompanionView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    Button {
-                        dismissScriptKeyboard()
-                        resumeManually()
-                    } label: {
-                        Label("Present", systemImage: "play.fill")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.large)
-                    .accessibilityIdentifier("presentButton")
-
                     settingsSection("Presentation Script") {
                         TextEditor(text: $script)
                             .font(.system(size: 16, design: .monospaced))
@@ -697,12 +718,17 @@ struct PresentationCompanionView: View {
                         }
                         .pickerStyle(.segmented)
 
-                        Picker("Countdown", selection: countdownBehaviorBinding) {
-                            ForEach(IOSCountdownBehavior.allCases, id: \.self) { behavior in
-                                Text(behavior.label).tag(behavior)
+                        HStack {
+                            Text("Countdown")
+                            Spacer()
+                            Picker("Countdown", selection: countdownBehaviorBinding) {
+                                ForEach(IOSCountdownBehavior.allCases, id: \.self) { behavior in
+                                    Text(behavior.label).tag(behavior)
+                                }
                             }
+                            .labelsHidden()
+                            .pickerStyle(.menu)
                         }
-                        .pickerStyle(.menu)
 
                         sliderRow(
                             "Countdown duration",
@@ -782,6 +808,10 @@ struct PresentationCompanionView: View {
                                 .foregroundStyle(.secondary)
                         }
                     }
+
+                    Color.clear
+                        .frame(height: 82)
+                        .accessibilityHidden(true)
                 }
                 .padding(.horizontal, 18)
                 .padding(.vertical, 16)
@@ -831,6 +861,9 @@ struct PresentationCompanionView: View {
                     .accessibilityIdentifier("configurationSurface")
                     .accessibilityValue("\(Int(scrollOffset.rounded()))")
             }
+            .overlay(alignment: .bottom) {
+                floatingPresentButton
+            }
             .alert("Load from Link", isPresented: $isLoadLinkPresented) {
                 TextField("https://example.com/article", text: $linkInput)
                     .textInputAutocapitalization(.never)
@@ -863,6 +896,25 @@ struct PresentationCompanionView: View {
                 Text(loadLinkErrorMessage ?? "The link could not be loaded.")
             }
         }
+    }
+
+    private var floatingPresentButton: some View {
+        Button {
+            dismissScriptKeyboard()
+            resumeManually()
+        } label: {
+            Label("Present", systemImage: "play.fill")
+                .font(.headline.weight(.semibold))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 14)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.white)
+        .background(Color.accentColor, in: Capsule())
+        .shadow(color: .black.opacity(0.24), radius: 16, x: 0, y: 8)
+        .padding(.horizontal, 18)
+        .padding(.bottom, 12)
+        .accessibilityIdentifier("presentButton")
     }
 
     private func settingsSection<Content: View>(
@@ -928,7 +980,7 @@ struct PresentationCompanionView: View {
     private func togglePlayback() {
         presentationLog("togglePlayback running=\(isRunning) counting=\(isCountingDown)")
         isScriptFocused = false
-        if isRunning || isCountingDown {
+        if promptControlShowsPause {
             pauseManually()
         } else {
             resumeManually()
@@ -955,6 +1007,7 @@ struct PresentationCompanionView: View {
     private func resetScroll() {
         presentationLogger.notice("resetScroll")
         stopPlayback()
+        isManuallyPaused = false
         scrollOffset = 0
         transcriptSpokenCharacterEnd = 0
         transcriptMatchedTokenIndex = -1
@@ -978,6 +1031,7 @@ struct PresentationCompanionView: View {
         isPausedByVoiceMonitor = false
         isVoiceResumeBlockedByManualPause = false
         isWaitingForVoiceStart = false
+        isManuallyPaused = false
     }
 
     private func loadScriptFromLink() async {
@@ -1090,10 +1144,9 @@ struct PresentationCompanionView: View {
     private func pauseManually() {
         presentationLog("pauseManually")
         stopPlayback()
+        isManuallyPaused = true
         isPausedByVoiceMonitor = false
-        if autoPauseResumeWithLocalMic {
-            isVoiceResumeBlockedByManualPause = true
-        }
+        isVoiceResumeBlockedByManualPause = autoPauseResumeWithLocalMic || transcriptBasedPrompt
     }
 
     private func resumeManually() {
@@ -1133,8 +1186,8 @@ struct PresentationCompanionView: View {
         }
 
         guard shouldRunCountdown else {
-            if autoPauseResumeWithLocalMic, shouldUseCountdownOnNextStart {
-                beginWaitingForVoiceStart()
+            if shouldWaitForMicInputOnStart {
+                beginWaitingForMicStart()
                 return
             }
             beginRunningNow()
@@ -1173,8 +1226,8 @@ struct PresentationCompanionView: View {
             }
 
             guard !Task.isCancelled else { return }
-            if autoPauseResumeWithLocalMic {
-                beginWaitingForVoiceStart()
+            if shouldWaitForMicInputOnStart {
+                beginWaitingForMicStart()
             } else {
                 beginRunningNow()
             }
@@ -1182,17 +1235,21 @@ struct PresentationCompanionView: View {
         }
     }
 
-    private func beginWaitingForVoiceStart() {
-        presentationLog("beginWaitingForVoiceStart")
+    private func beginWaitingForMicStart() {
+        presentationLog("beginWaitingForMicStart")
         isCountingDown = false
         countdownRemaining = 0
         shouldUseCountdownOnNextStart = false
         isRunning = false
-        isPausedByVoiceMonitor = true
+        isManuallyPaused = false
+        isPausedByVoiceMonitor = autoPauseResumeWithLocalMic
         isVoiceResumeBlockedByManualPause = false
         isWaitingForVoiceStart = true
         lastTickDate = nil
         updateVoiceMonitor()
+        if voiceMonitor.isVoiceActive {
+            handleVoiceActivityChanged(true)
+        }
     }
 
     private func beginRunningNow() {
@@ -1201,6 +1258,7 @@ struct PresentationCompanionView: View {
         countdownRemaining = 0
         shouldUseCountdownOnNextStart = false
         isWaitingForVoiceStart = false
+        isManuallyPaused = false
         isRunning = true
         lastTickDate = nil
     }
@@ -1256,19 +1314,24 @@ struct PresentationCompanionView: View {
     }
 
     private func handleVoiceActivityChanged(_ isVoiceActive: Bool) {
-        guard autoPauseResumeWithLocalMic else { return }
-
         if isVoiceActive {
+            guard !isVoiceResumeBlockedByManualPause, !isManuallyPaused else { return }
+            if transcriptBasedPrompt, isWaitingForVoiceStart, !isRunning, !isCountingDown {
+                beginRunningNow()
+                return
+            }
+            isWaitingForVoiceStart = false
+            guard autoPauseResumeWithLocalMic else { return }
             guard isPausedByVoiceMonitor,
                   !isVoiceResumeBlockedByManualPause,
                   !isRunning,
                   !isCountingDown else { return }
             isPausedByVoiceMonitor = false
-            isWaitingForVoiceStart = false
-            startPlayback()
+            beginRunningNow()
             return
         }
 
+        guard autoPauseResumeWithLocalMic else { return }
         guard isRunning || isCountingDown else { return }
         stopPlayback()
         isPausedByVoiceMonitor = true
@@ -1277,6 +1340,13 @@ struct PresentationCompanionView: View {
 
     private func updateTranscriptProgress(_ transcript: String) {
         guard transcriptBasedPrompt else { return }
+        if isWaitingForVoiceStart,
+           !isVoiceResumeBlockedByManualPause,
+           !isManuallyPaused,
+           !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            beginRunningNow()
+        }
+        guard isRunning, !isManuallyPaused else { return }
         transcriptVisibleUTF16Range = currentVisibleUTF16Range()
         let progress = transcriptProgress(for: transcript)
         transcriptSpokenCharacterEnd = progress.spokenCharacterEnd
@@ -1607,6 +1677,14 @@ struct PresentationCompanionView: View {
 
     private var countdownBehavior: IOSCountdownBehavior {
         IOSCountdownBehavior(rawValue: countdownBehaviorRaw) ?? .freshStartOnly
+    }
+
+    private var shouldWaitForMicInputOnStart: Bool {
+        autoPauseResumeWithLocalMic || transcriptBasedPrompt
+    }
+
+    private var promptControlShowsPause: Bool {
+        !isManuallyPaused && (isRunning || isCountingDown || isWaitingForVoiceStart)
     }
 
     private var countdownBehaviorBinding: Binding<IOSCountdownBehavior> {
