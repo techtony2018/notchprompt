@@ -267,19 +267,22 @@ struct ScrollingTextView: View {
     private func scrollingContent(highlightTranscript: Bool) -> some View {
         Text(attributedPromptText(highlightTranscript: highlightTranscript))
             .font(.system(size: fontSize, weight: .regular, design: .monospaced))
-            .foregroundStyle(textColor)
             .frame(maxWidth: .infinity, alignment: .leading)
             .fixedSize(horizontal: false, vertical: true)
     }
 
     private func attributedPromptText(highlightTranscript: Bool) -> AttributedString {
         var attributed = AttributedString(text)
+        if let fullStringRange = Range(text.startIndex..<text.endIndex, in: attributed) {
+            attributed[fullStringRange].foregroundColor = textColor
+        }
         guard highlightTranscript else { return attributed }
         let clampedEnd = min(max(transcriptSpokenCharacterEnd, 0), (text as NSString).length)
         if clampedEnd > 0,
            let stringRange = Range(NSRange(location: 0, length: clampedEnd), in: text),
            let attributedRange = Range(stringRange, in: attributed) {
             attributed[attributedRange].foregroundColor = .blue
+            attributed[attributedRange].underlineStyle = .single
         }
         return attributed
     }
@@ -373,17 +376,37 @@ struct ScrollingTextView: View {
     }
 
     private func applyTranscriptProgress() {
+        let visiblePhase = visiblePhaseInCurrentCycle()
         let spokenBottom = renderedHeight(upToUTF16Offset: transcriptSpokenCharacterEnd)
         let lineHeight = promptLineHeight
         let remainingLines = CGFloat(max(transcriptScrollUponRemainingLines, 1))
-        let threshold = phase + max(viewportHeight - (remainingLines * lineHeight), 0)
+        let threshold = visiblePhase + max(viewportHeight - (remainingLines * lineHeight), 0)
         guard spokenBottom >= threshold else { return }
         let contextOffset = utf16OffsetBeforeMatchedContext(keepingWords: transcriptKeepMatchedWords)
-        let target = renderedHeight(upToUTF16Offset: contextOffset)
+        let visibleTarget = renderedHeight(upToUTF16Offset: contextOffset)
+        let target = phaseBaseForCurrentCycle(visiblePhase: visiblePhase) + visibleTarget
         guard transcriptProgressAllowsBackward || target > phase else { return }
         hasReachedEndInStopMode = false
         deferredStopTargetPhase = nil
-        phase = min(max(target, topOfScriptPhaseFloor), endPhase)
+        if scrollMode == .stopAtEnd {
+            phase = min(max(target, topOfScriptPhaseFloor), endPhase)
+        } else {
+            phase = max(target, topOfScriptPhaseFloor)
+            if phase >= cycleLength * 8 || phase <= -(cycleLength * 8) {
+                phase = phase.truncatingRemainder(dividingBy: cycleLength)
+            }
+        }
+    }
+
+    private func visiblePhaseInCurrentCycle() -> CGFloat {
+        guard scrollMode == .infinite else { return max(phase, 0) }
+        let remainder = phase.truncatingRemainder(dividingBy: cycleLength)
+        return max(remainder, 0)
+    }
+
+    private func phaseBaseForCurrentCycle(visiblePhase: CGFloat) -> CGFloat {
+        guard scrollMode == .infinite else { return 0 }
+        return phase - visiblePhase
     }
 
     private var promptLineHeight: CGFloat {

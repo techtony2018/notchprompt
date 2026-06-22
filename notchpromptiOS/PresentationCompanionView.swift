@@ -482,7 +482,6 @@ struct PresentationCompanionView: View {
 
                 Text(attributedPromptText)
                     .font(.system(size: fontSize, weight: .regular, design: .rounded))
-                    .foregroundStyle(Color(hex: promptTextColorHex, fallback: .white))
                     .lineSpacing(fontSize * 0.35)
                     .opacity(isManuallyPaused ? 0.28 : 1)
                     .padding(.horizontal, 24)
@@ -560,11 +559,15 @@ struct PresentationCompanionView: View {
 
     private var attributedPromptText: AttributedString {
         var attributed = AttributedString(script)
+        if let fullStringRange = Range(script.startIndex..<script.endIndex, in: attributed) {
+            attributed[fullStringRange].foregroundColor = Color(hex: promptTextColorHex, fallback: .white)
+        }
         let clampedEnd = min(max(transcriptBasedPrompt ? transcriptSpokenCharacterEnd : 0, 0), (script as NSString).length)
         if clampedEnd > 0,
            let stringRange = Range(NSRange(location: 0, length: clampedEnd), in: script),
            let attributedRange = Range(stringRange, in: attributed) {
             attributed[attributedRange].foregroundColor = .blue
+            attributed[attributedRange].underlineStyle = .single
         }
         return attributed
     }
