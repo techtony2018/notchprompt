@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.149 - 2026-06-22
+
+- Added Text to Speech settings for voice, speech rate, pitch, and volume on macOS and iOS.
+- Added a speaker preview button in Text to Speech settings; changing the voice or TTS options while previewing now restarts preview with the selected settings.
+- Filtered Text to Speech voice choices by the selected script/recognition language group.
+- Improved iOS voice selection with a scrollable voice sheet so long voice lists remain usable.
+- Made Text to Speech read from the current prompt anchor, pause/resume with presentation playback, stop on reset or end-of-script, and continue from the beginning when Play in loops is enabled.
+
 ## 1.1.1 - 2026-02-27
 
 - Fixed shortcut reliability by moving app-wide keyboard shortcuts to Carbon system hotkeys instead of fragile event monitors.

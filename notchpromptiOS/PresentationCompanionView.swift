@@ -7,8 +7,187 @@ import SwiftUI
 import Combine
 import Darwin
 import UIKit
+import AVFoundation
 
 private let timingAidMinutesRange: ClosedRange<Double> = 1...100
+private let speechRateRange: ClosedRange<Double> = 0.25...0.65
+private let speechPitchRange: ClosedRange<Double> = 0.5...2.0
+private let speechVolumeRange: ClosedRange<Double> = 0...1
+
+private final class ScriptSpeaker: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
+    @Published var isReading = false
+    @Published var isPaused = false
+    private let synthesizer = AVSpeechSynthesizer()
+    private var fullScript = ""
+    private var voiceIdentifier: String?
+    private var languageIdentifier = "en-US"
+    private var speechRate = Double(AVSpeechUtteranceDefaultSpeechRate)
+    private var speechPitch = 1.0
+    private var speechVolume = 1.0
+    private var shouldLoopAfterFinish = false
+
+    override init() {
+        super.init()
+        synthesizer.delegate = self
+    }
+
+    func toggle(
+        script: String,
+        startUTF16Offset: Int,
+        voiceIdentifier: String?,
+        languageIdentifier: String,
+        rate: Double,
+        pitch: Double,
+        volume: Double,
+        shouldLoop: Bool
+    ) {
+        if isPaused {
+            updateConfiguration(
+                script: script,
+                voiceIdentifier: voiceIdentifier,
+                languageIdentifier: languageIdentifier,
+                rate: rate,
+                pitch: pitch,
+                volume: volume,
+                shouldLoop: shouldLoop
+            )
+            if synthesizer.continueSpeaking() {
+                isPaused = false
+                isReading = true
+            }
+            return
+        }
+        if synthesizer.isSpeaking {
+            shouldLoopAfterFinish = false
+            synthesizer.stopSpeaking(at: .immediate)
+            isReading = false
+            isPaused = false
+            return
+        }
+
+        updateConfiguration(
+            script: script,
+            voiceIdentifier: voiceIdentifier,
+            languageIdentifier: languageIdentifier,
+            rate: rate,
+            pitch: pitch,
+            volume: volume,
+            shouldLoop: shouldLoop
+        )
+        speak(fromUTF16Offset: startUTF16Offset)
+    }
+
+    func refreshPreview(
+        script: String,
+        startUTF16Offset: Int,
+        voiceIdentifier: String?,
+        languageIdentifier: String,
+        rate: Double,
+        pitch: Double,
+        volume: Double,
+        shouldLoop: Bool
+    ) {
+        guard synthesizer.isSpeaking || isPaused else { return }
+        let wasPaused = isPaused
+        stop()
+        updateConfiguration(
+            script: script,
+            voiceIdentifier: voiceIdentifier,
+            languageIdentifier: languageIdentifier,
+            rate: rate,
+            pitch: pitch,
+            volume: volume,
+            shouldLoop: shouldLoop
+        )
+        speak(fromUTF16Offset: startUTF16Offset)
+        if wasPaused {
+            pause()
+        }
+    }
+
+    func pause() {
+        guard synthesizer.isSpeaking else { return }
+        synthesizer.pauseSpeaking(at: .word)
+        isPaused = true
+        isReading = false
+    }
+
+    func resume() {
+        guard isPaused else { return }
+        if synthesizer.continueSpeaking() {
+            isPaused = false
+            isReading = true
+        }
+    }
+
+    private func updateConfiguration(
+        script: String,
+        voiceIdentifier: String?,
+        languageIdentifier: String,
+        rate: Double,
+        pitch: Double,
+        volume: Double,
+        shouldLoop: Bool
+    ) {
+        fullScript = script
+        self.voiceIdentifier = voiceIdentifier
+        self.languageIdentifier = languageIdentifier
+        speechRate = min(max(rate, speechRateRange.lowerBound), speechRateRange.upperBound)
+        speechPitch = min(max(pitch, speechPitchRange.lowerBound), speechPitchRange.upperBound)
+        speechVolume = min(max(volume, speechVolumeRange.lowerBound), speechVolumeRange.upperBound)
+        shouldLoopAfterFinish = shouldLoop
+    }
+
+    func stop() {
+        shouldLoopAfterFinish = false
+        if synthesizer.isSpeaking {
+            synthesizer.stopSpeaking(at: .immediate)
+        }
+        isReading = false
+        isPaused = false
+    }
+
+    private func speak(fromUTF16Offset utf16Offset: Int) {
+        let nsScript = fullScript as NSString
+        let clampedOffset = min(max(utf16Offset, 0), nsScript.length)
+        var text = nsScript.substring(from: clampedOffset).trimmingCharacters(in: .whitespacesAndNewlines)
+        if text.isEmpty, clampedOffset > 0 {
+            text = fullScript.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        guard !text.isEmpty else {
+            isReading = false
+            shouldLoopAfterFinish = false
+            return
+        }
+        let utterance = AVSpeechUtterance(string: text)
+        if let voiceIdentifier,
+           let selectedVoice = AVSpeechSynthesisVoice(identifier: voiceIdentifier) {
+            utterance.voice = selectedVoice
+        } else {
+            utterance.voice = AVSpeechSynthesisVoice(language: languageIdentifier)
+        }
+        utterance.rate = Float(speechRate)
+        utterance.pitchMultiplier = Float(speechPitch)
+        utterance.volume = Float(speechVolume)
+        isReading = true
+        isPaused = false
+        synthesizer.speak(utterance)
+    }
+
+    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
+        if shouldLoopAfterFinish {
+            speak(fromUTF16Offset: 0)
+            return
+        }
+        isReading = false
+        isPaused = false
+    }
+
+    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
+        isReading = false
+        isPaused = false
+    }
+}
 
 private enum IOSScrollMode: String, CaseIterable {
     case infinite
@@ -90,6 +269,7 @@ Thank you.
 struct PresentationCompanionView: View {
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var voiceMonitor = IOSLocalMicrophoneVoiceMonitor()
+    @StateObject private var scriptSpeaker = ScriptSpeaker()
     @AppStorage("ios.script") private var script = PresentationCompanionDefaults.script
     @AppStorage("ios.sourceLink") private var sourceLink = ""
     @State private var isRunning = false
@@ -97,6 +277,10 @@ struct PresentationCompanionView: View {
     @AppStorage("ios.fontSize") private var fontSize: Double = 30
     @AppStorage("ios.promptBackgroundColorHex") private var promptBackgroundColorHex = "#000000"
     @AppStorage("ios.promptTextColorHex") private var promptTextColorHex = "#FFFFFF"
+    @AppStorage("ios.speechVoiceIdentifier") private var speechVoiceIdentifier = "auto"
+    @AppStorage("ios.speechRate") private var speechRate: Double = Double(AVSpeechUtteranceDefaultSpeechRate)
+    @AppStorage("ios.speechPitch") private var speechPitch: Double = 1.0
+    @AppStorage("ios.speechVolume") private var speechVolume: Double = 1.0
     @AppStorage("ios.paceLines") private var paceLines: Double = 2
     @State private var scrollOffset: CGFloat = 0
     @State private var dragStartScrollOffset: CGFloat?
@@ -126,6 +310,7 @@ struct PresentationCompanionView: View {
     @State private var isVoiceResumeBlockedByManualPause = false
     @State private var isWaitingForVoiceStart = false
     @State private var isManuallyPaused = false
+    @State private var didResetPrompt = false
     @State private var transcriptSpokenCharacterEnd = 0
     @State private var transcriptMatchedTokenIndex = -1
     @State private var transcriptConsumedTokenCount = 0
@@ -152,6 +337,7 @@ struct PresentationCompanionView: View {
     @State private var isLoadLinkPresented = false
     @State private var isLoadingLink = false
     @State private var loadLinkErrorMessage: String?
+    @State private var isSpeechVoicePickerPresented = false
     @AppStorage("ios.promptToolbarOffsetX") private var promptToolbarOffsetX: Double = 0
     @AppStorage("ios.promptToolbarOffsetY") private var promptToolbarOffsetY: Double = 0
     @AppStorage("ios.promptToolbarOpacity") private var promptToolbarOpacity: Double = 1
@@ -194,6 +380,10 @@ struct PresentationCompanionView: View {
     ]
 
     var body: some View {
+        lifecycleObservedSurface
+    }
+
+    private var baseSurface: some View {
         GeometryReader { proxy in
             ZStack {
                 foregroundSurface
@@ -215,10 +405,15 @@ struct PresentationCompanionView: View {
                 refreshScriptAnalysis()
                 migrateLineBasedPlaybackDefaultsIfNeeded()
                 normalizeVoiceModeSelection()
+                normalizeSpeechVoiceSelection()
                 normalizeTimeWarningSettings()
                 updateVoiceMonitor()
             }
         }
+    }
+
+    private var playbackObservedSurface: some View {
+        baseSurface
         .onReceive(timer) { date in
             tick(at: date)
         }
@@ -243,6 +438,10 @@ struct PresentationCompanionView: View {
             transcriptConsumedTokenCount = 0
             updateVoiceMonitor()
         }
+    }
+
+    private var transcriptObservedSurface: some View {
+        playbackObservedSurface
         .onChange(of: transcriptMatchConsecutiveWords) { _, value in
             transcriptMatchConsecutiveWords = Int(min(max(value, 1), 10))
             transcriptSpokenCharacterEnd = 0
@@ -260,6 +459,10 @@ struct PresentationCompanionView: View {
             transcriptMatchedTokenIndex = -1
             transcriptConsumedTokenCount = 0
         }
+    }
+
+    private var settingsObservedSurface: some View {
+        transcriptObservedSurface
         .onChange(of: timeWarningDurationMinutes) { _, _ in
             syncDefaultTimeWarningThresholds()
         }
@@ -278,6 +481,18 @@ struct PresentationCompanionView: View {
         .onChange(of: transcriptLanguageIdentifier) { _, _ in
             updateVoiceMonitor()
         }
+    }
+
+    private var speechObservedSurface: some View {
+        settingsObservedSurface
+        .onChange(of: speechPreviewSettingsSignature) { _, _ in
+            normalizeSpeechVoiceSelection()
+            refreshSpeechPreviewIfNeeded()
+        }
+    }
+
+    private var lifecycleObservedSurface: some View {
+        speechObservedSurface
         .onChange(of: voiceMonitor.isVoiceActive) { _, isVoiceActive in
             handleVoiceActivityChanged(isVoiceActive)
         }
@@ -452,6 +667,8 @@ struct PresentationCompanionView: View {
                     .foregroundStyle(.white)
             }
             .allowsHitTesting(false)
+        } else if didResetPrompt {
+            promptInfoCard(symbol: "play.fill", text: "Presentation reset, click Play again to start")
         } else if isManuallyPaused {
             promptInfoCard(symbol: "play.fill", text: "Presentation paused, click Play again to resume")
         } else if shouldShowVoiceStartTip {
@@ -755,47 +972,19 @@ struct PresentationCompanionView: View {
             .accessibilityIdentifier("resetButton")
             .layoutPriority(1)
 
-            toolbarJumpButton(
-                symbol: "gobackward",
-                accessibilityLabel: "Back by configured line pace",
-                accessibilityIdentifier: "backButton",
-                direction: -1
-            )
-
-            toolbarJumpButton(
-                symbol: "goforward",
-                accessibilityLabel: "Forward by configured line pace",
-                accessibilityIdentifier: "forwardButton",
-                direction: 1
-            )
-
             Button {
-                if let text = UIPasteboard.general.string {
-                    script = text
-                    resetScroll(resetTimer: false)
-                }
+                toggleSpeechPreview()
             } label: {
-                Image(systemName: "doc.on.clipboard")
+                Image(systemName: scriptSpeaker.isReading ? "speaker.wave.2.fill" : "speaker.wave.2")
                     .font(.headline)
                     .frame(width: 34, height: 34)
             }
             .buttonStyle(.plain)
             .foregroundStyle(.white)
             .background(.white.opacity(0.16), in: Circle())
-            .accessibilityLabel("Paste script from clipboard")
-
-            Button {
-                script = ""
-                resetScroll(resetTimer: false)
-            } label: {
-                Image(systemName: "trash")
-                    .font(.headline)
-                    .frame(width: 34, height: 34)
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(.white)
-            .background(.white.opacity(0.16), in: Circle())
-            .accessibilityLabel("Clear script")
+            .accessibilityLabel(scriptSpeaker.isReading ? "Stop reading script" : "Read script aloud")
+            .accessibilityIdentifier("speakerButton")
+            .layoutPriority(1)
 
             Button {
                 openSettings()
@@ -816,6 +1005,79 @@ struct PresentationCompanionView: View {
         .liquidCapsule(opacity: 0.58)
         .shadow(color: .black.opacity(0.26), radius: 14, x: 0, y: 8)
         .opacity(promptToolbarOpacity)
+    }
+
+    private var scriptEditorTopActions: some View {
+        HStack(spacing: 8) {
+            Button {
+                if let text = UIPasteboard.general.string {
+                    script = text
+                    resetScroll(resetTimer: false)
+                }
+            } label: {
+                Label("Paste", systemImage: "doc.on.clipboard")
+                    .labelStyle(.iconOnly)
+            }
+            .buttonStyle(.bordered)
+            .accessibilityLabel("Paste script from clipboard")
+
+            Button(role: .destructive) {
+                script = ""
+                resetScroll(resetTimer: false)
+            } label: {
+                Label("Clear", systemImage: "trash")
+                    .labelStyle(.iconOnly)
+            }
+            .buttonStyle(.bordered)
+            .accessibilityLabel("Clear script")
+        }
+    }
+
+    private var availableSpeechVoices: [AVSpeechSynthesisVoice] {
+        AVSpeechSynthesisVoice.speechVoices().sorted {
+            let lhs = "\($0.language) \($0.name)"
+            let rhs = "\($1.language) \($1.name)"
+            return lhs.localizedCaseInsensitiveCompare(rhs) == .orderedAscending
+        }
+    }
+
+    private var filteredSpeechVoices: [AVSpeechSynthesisVoice] {
+        let group = languageGroup(for: effectiveTranscriptLanguageIdentifier)
+        return availableSpeechVoices.filter { languageGroup(for: $0.language) == group }
+    }
+
+    private var selectedSpeechVoiceLabel: String {
+        if speechVoiceIdentifier != "auto",
+           let voice = AVSpeechSynthesisVoice(identifier: speechVoiceIdentifier) {
+            return "\(voice.name) (\(voice.language))"
+        }
+        return "Auto (\(transcriptLanguageLabel(for: effectiveTranscriptLanguageIdentifier)))"
+    }
+
+    private var speechPreviewSettingsSignature: String {
+        [
+            effectiveTranscriptLanguageIdentifier,
+            speechVoiceIdentifier,
+            String(format: "%.3f", speechRate),
+            String(format: "%.3f", speechPitch),
+            String(format: "%.3f", speechVolume)
+        ].joined(separator: "|")
+    }
+
+    private var selectedSpeechVoiceIdentifier: String? {
+        if speechVoiceIdentifier != "auto",
+           AVSpeechSynthesisVoice(identifier: speechVoiceIdentifier) != nil {
+            return speechVoiceIdentifier
+        }
+        return nil
+    }
+
+    private func languageGroup(for identifier: String) -> String {
+        let normalized = identifier.replacingOccurrences(of: "_", with: "-").lowercased()
+        if normalized.hasPrefix("zh") {
+            return "zh"
+        }
+        return normalized.split(separator: "-").first.map(String.init) ?? normalized
     }
 
     private func toolbarJumpButton(
@@ -875,18 +1137,22 @@ struct PresentationCompanionView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     settingsSection("Presentation Script") {
-                        TextEditor(text: $script)
-                            .font(.system(size: 16, design: .monospaced))
-                            .scrollContentBackground(.hidden)
-                            .background(Color(.secondarySystemGroupedBackground))
-                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                    .stroke(Color(.separator).opacity(0.7), lineWidth: 1)
-                            )
-                            .frame(height: scriptEditorHeight)
-                            .focused($isScriptFocused)
-                            .accessibilityIdentifier("scriptEditor")
+                        VStack(alignment: .trailing, spacing: 8) {
+                            scriptEditorTopActions
+
+                            TextEditor(text: $script)
+                                .font(.system(size: 16, design: .monospaced))
+                                .scrollContentBackground(.hidden)
+                                .background(Color(.secondarySystemGroupedBackground))
+                                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                        .stroke(Color(.separator).opacity(0.7), lineWidth: 1)
+                                )
+                                .frame(height: scriptEditorHeight)
+                                .focused($isScriptFocused)
+                                .accessibilityIdentifier("scriptEditor")
+                        }
 
                         scriptEditorResizeHandle
 
@@ -1068,6 +1334,48 @@ struct PresentationCompanionView: View {
 
                     }
 
+                    settingsSection("Text to Speech") {
+                        Button {
+                            toggleSpeechPreview()
+                        } label: {
+                            Image(systemName: scriptSpeaker.isReading ? "speaker.wave.2.fill" : "speaker.wave.2")
+                                .font(.caption.weight(.semibold))
+                                .frame(width: 22, height: 22)
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.blue)
+                        .accessibilityLabel(scriptSpeaker.isReading ? "Stop speech preview" : "Preview speech")
+                    } content: {
+                        HStack {
+                            Text("Voice")
+                            Spacer()
+                            Button {
+                                isSpeechVoicePickerPresented = true
+                            } label: {
+                                HStack(spacing: 6) {
+                                    Text(selectedSpeechVoiceLabel)
+                                        .lineLimit(1)
+                                        .truncationMode(.middle)
+                                    Image(systemName: "chevron.up.chevron.down")
+                                        .font(.caption.weight(.semibold))
+                                }
+                            }
+                            .buttonStyle(.bordered)
+                        }
+
+                        sliderRow("Speech rate", value: $speechRate, range: speechRateRange, step: 0.01) { value in
+                            String(format: "%.2f", value)
+                        }
+
+                        sliderRow("Pitch", value: $speechPitch, range: speechPitchRange, step: 0.1) { value in
+                            String(format: "%.1fx", value)
+                        }
+
+                        sliderRow("Volume", value: $speechVolume, range: speechVolumeRange, step: 0.05) { value in
+                            "\(Int((value * 100).rounded()))%"
+                        }
+                    }
+
                     settingsSection("Presentation timing aid") {
                         Toggle("Show timer", isOn: $showTimer)
 
@@ -1165,6 +1473,9 @@ struct PresentationCompanionView: View {
             .overlay(alignment: .bottom) {
                 floatingPresentButton
             }
+            .sheet(isPresented: $isSpeechVoicePickerPresented) {
+                speechVoicePicker
+            }
             .alert("Load from Link", isPresented: $isLoadLinkPresented) {
                 TextField("https://example.com/article", text: $linkInput)
                     .textInputAutocapitalization(.never)
@@ -1218,15 +1529,76 @@ struct PresentationCompanionView: View {
         .accessibilityIdentifier("presentButton")
     }
 
+    private var speechVoicePicker: some View {
+        NavigationStack {
+            List {
+                Button {
+                    speechVoiceIdentifier = "auto"
+                    isSpeechVoicePickerPresented = false
+                } label: {
+                    HStack {
+                        Text("Auto (\(transcriptLanguageLabel(for: effectiveTranscriptLanguageIdentifier)))")
+                        Spacer()
+                        if speechVoiceIdentifier == "auto" {
+                            Image(systemName: "checkmark")
+                                .foregroundStyle(.blue)
+                        }
+                    }
+                }
+
+                ForEach(filteredSpeechVoices, id: \.identifier) { voice in
+                    Button {
+                        speechVoiceIdentifier = voice.identifier
+                        isSpeechVoicePickerPresented = false
+                    } label: {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(voice.name)
+                                Text(voice.language)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            if speechVoiceIdentifier == voice.identifier {
+                                Image(systemName: "checkmark")
+                                    .foregroundStyle(.blue)
+                            }
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Voice")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") {
+                        isSpeechVoicePickerPresented = false
+                    }
+                }
+            }
+        }
+    }
+
     private func settingsSection<Content: View>(
         _ title: String,
         @ViewBuilder content: () -> Content
     ) -> some View {
+        settingsSection(title, accessory: { EmptyView() }, content: content)
+    }
+
+    private func settingsSection<Content: View, Accessory: View>(
+        _ title: String,
+        @ViewBuilder accessory: () -> Accessory,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(title)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .textCase(.uppercase)
+            HStack(spacing: 8) {
+                Text(title)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .textCase(.uppercase)
+                accessory()
+            }
 
             VStack(alignment: .leading, spacing: 12) {
                 content()
@@ -1341,6 +1713,40 @@ struct PresentationCompanionView: View {
         }
     }
 
+    private func toggleSpeechPreview() {
+        scriptSpeaker.toggle(
+            script: script,
+            startUTF16Offset: currentSpeechStartUTF16Offset,
+            voiceIdentifier: selectedSpeechVoiceIdentifier,
+            languageIdentifier: effectiveTranscriptLanguageIdentifier,
+            rate: speechRate,
+            pitch: speechPitch,
+            volume: speechVolume,
+            shouldLoop: scrollMode == .infinite
+        )
+    }
+
+    private func refreshSpeechPreviewIfNeeded() {
+        scriptSpeaker.refreshPreview(
+            script: script,
+            startUTF16Offset: currentSpeechStartUTF16Offset,
+            voiceIdentifier: selectedSpeechVoiceIdentifier,
+            languageIdentifier: effectiveTranscriptLanguageIdentifier,
+            rate: speechRate,
+            pitch: speechPitch,
+            volume: speechVolume,
+            shouldLoop: scrollMode == .infinite
+        )
+    }
+
+    private func normalizeSpeechVoiceSelection() {
+        guard speechVoiceIdentifier != "auto",
+              !filteredSpeechVoices.contains(where: { $0.identifier == speechVoiceIdentifier }) else {
+            return
+        }
+        speechVoiceIdentifier = "auto"
+    }
+
     private func jump(lines: Double) {
         scrollOffset += promptLineHeight * CGFloat(lines)
         clampScroll()
@@ -1358,8 +1764,9 @@ struct PresentationCompanionView: View {
     }
 
     private func resetScroll(resetTimer: Bool = true) {
-        stopPlayback()
+        stopPlayback(pauseSpeech: false)
         isManuallyPaused = false
+        didResetPrompt = resetTimer
         scrollOffset = 0
         transcriptSpokenCharacterEnd = 0
         transcriptMatchedTokenIndex = -1
@@ -1460,6 +1867,10 @@ struct PresentationCompanionView: View {
         return max(transcriptSpokenCharacterEnd, visibleProgress)
     }
 
+    private var currentSpeechStartUTF16Offset: Int {
+        min(max(scriptEditorProgressUTF16Offset, 0), script.utf16.count)
+    }
+
     private func refreshDetectedTranscriptLanguage() {
         detectedTranscriptLanguageIdentifier = IOSLocalMicrophoneVoiceMonitor.bestSpeechLocaleIdentifier(for: script)
         if !transcriptLanguageOptions.contains(where: { $0.id == transcriptLanguageIdentifier }) {
@@ -1510,25 +1921,28 @@ struct PresentationCompanionView: View {
 
         scrollOffset = min(scrollOffset, maxOffset)
         if scrollMode == .stopAtEnd, scrollOffset >= maxOffset {
-            stopPlayback()
+            stopPlayback(pauseSpeech: false)
         }
     }
 
     private func pauseManually() {
-        stopPlayback()
+        stopPlayback(pauseSpeech: true)
         isManuallyPaused = true
+        didResetPrompt = false
         isPausedByVoiceMonitor = false
         isVoiceResumeBlockedByManualPause = autoPauseResumeWithLocalMic || transcriptBasedPrompt
     }
 
     private func resumeManually() {
         isVoiceResumeBlockedByManualPause = false
+        scriptSpeaker.resume()
         startPlayback()
     }
 
     private func startPlayback() {
         guard !isRunning, !isCountingDown else { return }
 
+        didResetPrompt = false
         isPausedByVoiceMonitor = false
         continueStartingPlayback()
     }
@@ -1567,7 +1981,12 @@ struct PresentationCompanionView: View {
         beginCountdown(seconds: delay)
     }
 
-    private func stopPlayback() {
+    private func stopPlayback(pauseSpeech: Bool = true) {
+        if pauseSpeech {
+            scriptSpeaker.pause()
+        } else {
+            scriptSpeaker.stop()
+        }
         countdownTask?.cancel()
         countdownTask = nil
         isCountingDown = false
@@ -1612,6 +2031,7 @@ struct PresentationCompanionView: View {
         shouldUseCountdownOnNextStart = false
         isRunning = false
         isManuallyPaused = false
+        didResetPrompt = false
         isPausedByVoiceMonitor = autoPauseResumeWithLocalMic
         isVoiceResumeBlockedByManualPause = false
         isWaitingForVoiceStart = true
@@ -1628,7 +2048,9 @@ struct PresentationCompanionView: View {
         shouldUseCountdownOnNextStart = false
         isWaitingForVoiceStart = false
         isManuallyPaused = false
+        didResetPrompt = false
         isRunning = true
+        scriptSpeaker.resume()
         presentationTimerStartedAt = nil
         lastTickDate = nil
     }

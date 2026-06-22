@@ -9,9 +9,10 @@ import Foundation
 import Combine
 import CoreGraphics
 import AppKit
+import AVFoundation
 
 @MainActor
-final class PrompterModel: ObservableObject {
+final class PrompterModel: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
     enum ScrollMode: String, CaseIterable {
         case infinite
         case stopAtEnd
@@ -75,6 +76,13 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
     @Published private(set) var transcriptProgressToken: UUID = UUID()
     @Published private(set) var hasStartedSession: Bool = false
     @Published private(set) var isCountingDown: Bool = false
+    @Published private(set) var didResetPrompt: Bool = false
+    @Published private(set) var isReadingScriptAloud: Bool = false
+    @Published private(set) var isReadScriptAloudPaused: Bool = false
+    @Published var speechVoiceIdentifier: String = "auto"
+    @Published var speechRate: Double = Double(AVSpeechUtteranceDefaultSpeechRate)
+    @Published var speechPitch: Double = 1.0
+    @Published var speechVolume: Double = 1.0
     @Published var countdownSeconds: Int = 3
     @Published var countdownBehavior: CountdownBehavior = .freshStartOnly
     @Published private(set) var countdownRemaining: Int = 0
@@ -123,6 +131,8 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
     private var previousRecognizedTranscript = ""
     private var presentationTimerStartedAt: Date?
     private var isPresentationTimerActive = false
+    private let speechSynthesizer = AVSpeechSynthesizer()
+    private var shouldLoopSpeechAfterFinish = false
 
     static let secondsPerLineRange: ClosedRange<Double> = 1...20
     static let secondsPerLineStep: Double = 1
@@ -131,6 +141,9 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
     static let transcriptKeepMatchedWordsRange: ClosedRange<Int> = 0...30
     static let overlayHeightRange: ClosedRange<Double> = 120...720
     static let timeWarningMinutesRange: ClosedRange<Double> = 1...100
+    static let speechRateRange: ClosedRange<Double> = 0.25...0.65
+    static let speechPitchRange: ClosedRange<Double> = 0.5...2.0
+    static let speechVolumeRange: ClosedRange<Double> = 0...1
 
     private enum DefaultsKey {
         static let hasSavedSession = "hasSavedSession"
@@ -171,10 +184,17 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
         static let timeWarningRedThresholdMinutes = "timeWarningRedThresholdMinutes"
         static let timerOverlayOffsetX = "timerOverlayOffsetX"
         static let timerOverlayOffsetY = "timerOverlayOffsetY"
+        static let speechVoiceIdentifier = "speechVoiceIdentifier"
+        static let speechRate = "speechRate"
+        static let speechPitch = "speechPitch"
+        static let speechVolume = "speechVolume"
         static let selectedScreenID = "selectedScreenID"
     }
 
-    private init() {}
+    private override init() {
+        super.init()
+        speechSynthesizer.delegate = self
+    }
 
     static let transcriptLanguageOptions: [TranscriptLanguageOption] = [
         TranscriptLanguageOption(id: "auto", label: "Auto"),
@@ -208,6 +228,27 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
         Self.transcriptLanguageLabel(for: effectiveTranscriptLanguageIdentifier)
     }
 
+    var availableSpeechVoices: [AVSpeechSynthesisVoice] {
+        AVSpeechSynthesisVoice.speechVoices().sorted {
+            let lhs = "\($0.language) \($0.name)"
+            let rhs = "\($1.language) \($1.name)"
+            return lhs.localizedCaseInsensitiveCompare(rhs) == .orderedAscending
+        }
+    }
+
+    var filteredSpeechVoices: [AVSpeechSynthesisVoice] {
+        let group = Self.languageGroup(for: effectiveTranscriptLanguageIdentifier)
+        return availableSpeechVoices.filter { Self.languageGroup(for: $0.language) == group }
+    }
+
+    var effectiveSpeechVoice: AVSpeechSynthesisVoice? {
+        if speechVoiceIdentifier != "auto",
+           let selectedVoice = AVSpeechSynthesisVoice(identifier: speechVoiceIdentifier) {
+            return selectedVoice
+        }
+        return AVSpeechSynthesisVoice(language: effectiveTranscriptLanguageIdentifier)
+    }
+
     var voiceAutoPauseStatusText: String {
         isVoiceAutoPauseTalking ? "talking" : "paused, talk to continue"
     }
@@ -229,6 +270,14 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
             return option.label
         }
         return Locale.current.localizedString(forIdentifier: identifier) ?? identifier
+    }
+
+    static func languageGroup(for identifier: String) -> String {
+        let normalized = identifier.replacingOccurrences(of: "_", with: "-").lowercased()
+        if normalized.hasPrefix("zh") {
+            return "zh"
+        }
+        return normalized.split(separator: "-").first.map(String.init) ?? normalized
     }
 
     static func normalizedHexColor(_ value: String?, fallback: String) -> String {
@@ -291,10 +340,12 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
     }
 
     func resetScroll(resetTimer: Bool = true) {
+        stopReadScriptAloud()
         didReachEndInStopMode = false
         shouldUseCountdownOnNextStart = true
         savedScrollPhaseForResume = nil
         isManuallyPaused = false
+        didResetPrompt = resetTimer
         if resetTimer {
             presentationElapsedSeconds = 0
             presentationTimerStartedAt = nil
@@ -304,10 +355,12 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
     }
 
     func resetToFreshStart() {
+        stopReadScriptAloud()
         stop()
         manualScrollEnabled = false
         isManuallyPaused = false
         isWaitingForMicStart = false
+        didResetPrompt = true
         isPausedByVoiceMonitor = false
         isVoiceResumeBlockedByMousePause = false
         didReachEndInStopMode = false
@@ -384,6 +437,7 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
         isPausedByVoiceMonitor = true
         isManuallyPaused = false
         isWaitingForMicStart = false
+        didResetPrompt = false
         manualScrollEnabled = false
     }
 
@@ -419,11 +473,105 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
 
     func toggleRunning() {
         if promptControlShowsPause {
+            pauseReadScriptAloud()
             stop()
             isManuallyPaused = true
+            didResetPrompt = false
         } else {
             start()
         }
+    }
+
+    func toggleReadScriptAloud() {
+        if isReadScriptAloudPaused {
+            resumePausedReadScriptAloud()
+            return
+        }
+        if speechSynthesizer.isSpeaking {
+            stopReadScriptAloud()
+            return
+        }
+
+        shouldLoopSpeechAfterFinish = scrollMode == .infinite
+        speakScriptFromCurrentAnchor()
+    }
+
+    func refreshReadScriptAloudPreviewIfNeeded() {
+        guard speechSynthesizer.isSpeaking || isReadScriptAloudPaused else { return }
+        let wasPaused = isReadScriptAloudPaused
+        stopReadScriptAloud()
+        shouldLoopSpeechAfterFinish = scrollMode == .infinite
+        speakScriptFromCurrentAnchor()
+        if wasPaused {
+            pauseReadScriptAloud()
+        }
+    }
+
+    func pauseReadScriptAloud() {
+        guard speechSynthesizer.isSpeaking else { return }
+        speechSynthesizer.pauseSpeaking(at: .word)
+        isReadScriptAloudPaused = true
+        isReadingScriptAloud = false
+    }
+
+    func resumePausedReadScriptAloud() {
+        guard isReadScriptAloudPaused else { return }
+        if speechSynthesizer.continueSpeaking() {
+            isReadScriptAloudPaused = false
+            isReadingScriptAloud = true
+        }
+    }
+
+    func stopReadScriptAloud() {
+        shouldLoopSpeechAfterFinish = false
+        if speechSynthesizer.isSpeaking || isReadScriptAloudPaused {
+            speechSynthesizer.stopSpeaking(at: .immediate)
+        }
+        isReadScriptAloudPaused = false
+        isReadingScriptAloud = false
+    }
+
+    nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
+        Task { @MainActor in
+            if self.shouldLoopSpeechAfterFinish, self.scrollMode == .infinite {
+                self.speakScript(fromUTF16Offset: 0)
+                return
+            }
+            self.isReadingScriptAloud = false
+        }
+    }
+
+    nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
+        Task { @MainActor in
+            self.isReadingScriptAloud = false
+        }
+    }
+
+    private func speakScriptFromCurrentAnchor() {
+        speakScript(fromUTF16Offset: scriptProgressCharacterEnd)
+    }
+
+    private func speakScript(fromUTF16Offset utf16Offset: Int) {
+        let nsScript = script as NSString
+        let clampedOffset = min(max(utf16Offset, 0), nsScript.length)
+        var text = nsScript.substring(from: clampedOffset).trimmingCharacters(in: .whitespacesAndNewlines)
+        if text.isEmpty, clampedOffset > 0 {
+            text = script.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        guard !text.isEmpty else {
+            isReadingScriptAloud = false
+            shouldLoopSpeechAfterFinish = false
+            return
+        }
+
+        let utterance = AVSpeechUtterance(string: text)
+        utterance.voice = effectiveSpeechVoice
+        utterance.rate = Float(clamp(speechRate, lower: Self.speechRateRange.lowerBound, upper: Self.speechRateRange.upperBound))
+        utterance.pitchMultiplier = Float(clamp(speechPitch, lower: Self.speechPitchRange.lowerBound, upper: Self.speechPitchRange.upperBound))
+        utterance.volume = Float(clamp(speechVolume, lower: Self.speechVolumeRange.lowerBound, upper: Self.speechVolumeRange.upperBound))
+        isReadingScriptAloud = true
+        isReadScriptAloudPaused = false
+        speechSynthesizer.speak(utterance)
     }
 
     func tickPresentationTimer(now: Date = Date()) {
@@ -464,6 +612,7 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
             return
         }
 
+        didResetPrompt = false
         startPresentationTimerIfNeeded()
         isManuallyPaused = false
         isPausedByVoiceMonitor = false
@@ -502,6 +651,7 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
         didReachEndInStopMode = true
         isPresentationTimerActive = false
         presentationTimerStartedAt = nil
+        stopReadScriptAloud()
         stop()
     }
 
@@ -531,6 +681,7 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
     }
 
     func stop() {
+        pauseReadScriptAloud()
         countdownTask?.cancel()
         countdownTask = nil
         isCountingDown = false
@@ -1024,6 +1175,13 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
         normalizeTimeWarningSettings()
         timerOverlayOffsetX = defaults.object(forKey: DefaultsKey.timerOverlayOffsetX) as? Double ?? timerOverlayOffsetX
         timerOverlayOffsetY = defaults.object(forKey: DefaultsKey.timerOverlayOffsetY) as? Double ?? timerOverlayOffsetY
+        speechVoiceIdentifier = defaults.string(forKey: DefaultsKey.speechVoiceIdentifier) ?? speechVoiceIdentifier
+        if speechVoiceIdentifier != "auto", AVSpeechSynthesisVoice(identifier: speechVoiceIdentifier) == nil {
+            speechVoiceIdentifier = "auto"
+        }
+        speechRate = clamp(defaults.object(forKey: DefaultsKey.speechRate) as? Double ?? speechRate, lower: Self.speechRateRange.lowerBound, upper: Self.speechRateRange.upperBound)
+        speechPitch = clamp(defaults.object(forKey: DefaultsKey.speechPitch) as? Double ?? speechPitch, lower: Self.speechPitchRange.lowerBound, upper: Self.speechPitchRange.upperBound)
+        speechVolume = clamp(defaults.object(forKey: DefaultsKey.speechVolume) as? Double ?? speechVolume, lower: Self.speechVolumeRange.lowerBound, upper: Self.speechVolumeRange.upperBound)
         selectedScreenID = CGDirectDisplayID(defaults.object(forKey: DefaultsKey.selectedScreenID) as? UInt32 ?? 0)
     }
 
@@ -1063,6 +1221,10 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
         defaults.set(timeWarningRedThresholdMinutes, forKey: DefaultsKey.timeWarningRedThresholdMinutes)
         defaults.set(timerOverlayOffsetX, forKey: DefaultsKey.timerOverlayOffsetX)
         defaults.set(timerOverlayOffsetY, forKey: DefaultsKey.timerOverlayOffsetY)
+        defaults.set(speechVoiceIdentifier, forKey: DefaultsKey.speechVoiceIdentifier)
+        defaults.set(speechRate, forKey: DefaultsKey.speechRate)
+        defaults.set(speechPitch, forKey: DefaultsKey.speechPitch)
+        defaults.set(speechVolume, forKey: DefaultsKey.speechVolume)
         defaults.set(selectedScreenID, forKey: DefaultsKey.selectedScreenID)
     }
 
@@ -1106,6 +1268,7 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
         isRunning = false
         manualScrollEnabled = false
         isManuallyPaused = false
+        didResetPrompt = false
         isWaitingForMicStart = true
         isVoiceResumeBlockedByMousePause = false
         if autoPauseResumeWithLocalMic {
@@ -1120,7 +1283,9 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
         shouldUseCountdownOnNextStart = false
         isWaitingForMicStart = false
         isManuallyPaused = false
+        didResetPrompt = false
         isRunning = true
+        resumePausedReadScriptAloud()
     }
 
     private func resumeWithoutCountdown() {
@@ -1133,7 +1298,9 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
         manualScrollEnabled = false
         isWaitingForMicStart = false
         isManuallyPaused = false
+        didResetPrompt = false
         isRunning = true
+        resumePausedReadScriptAloud()
     }
 
     private func startPresentationTimerIfNeeded() {
@@ -1151,8 +1318,10 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
     }
 
     private func pauseFromMouseInteraction() {
+        pauseReadScriptAloud()
         stop()
         isManuallyPaused = true
+        didResetPrompt = false
         isWaitingForMicStart = false
         isPausedByVoiceMonitor = false
         isVoiceResumeBlockedByMousePause = true
@@ -1161,6 +1330,7 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
     private func resumeFromMouseInteraction() {
         isManuallyPaused = false
         isVoiceResumeBlockedByMousePause = false
+        resumePausedReadScriptAloud()
         start()
     }
 

@@ -73,6 +73,7 @@ struct ContentView: View {
                 headerSection
                 scriptSection
                 playbackSection
+                textToSpeechSection
                 timeWarningSection
                 appearanceSection
                 displaySection
@@ -107,6 +108,23 @@ struct ContentView: View {
         }
         .onChange(of: model.fuzzyTranscriptMatching) { _, _ in
             model.resetTranscriptProgress()
+        }
+        .onChange(of: model.effectiveTranscriptLanguageIdentifier) { _, _ in
+            normalizeSpeechVoiceSelection()
+            model.refreshReadScriptAloudPreviewIfNeeded()
+        }
+        .onChange(of: model.speechVoiceIdentifier) { _, _ in
+            normalizeSpeechVoiceSelection()
+            model.refreshReadScriptAloudPreviewIfNeeded()
+        }
+        .onChange(of: model.speechRate) { _, _ in
+            model.refreshReadScriptAloudPreviewIfNeeded()
+        }
+        .onChange(of: model.speechPitch) { _, _ in
+            model.refreshReadScriptAloudPreviewIfNeeded()
+        }
+        .onChange(of: model.speechVolume) { _, _ in
+            model.refreshReadScriptAloudPreviewIfNeeded()
         }
         .onChange(of: model.timeWarningDurationMinutes) { _, _ in
             model.syncDefaultTimeWarningThresholds()
@@ -416,11 +434,67 @@ struct ContentView: View {
         }
     }
 
+    private var textToSpeechSection: some View {
+        SettingsSection(title: "Text to Speech") {
+            Button {
+                model.toggleReadScriptAloud()
+            } label: {
+                Image(systemName: model.isReadingScriptAloud ? "speaker.wave.2.fill" : "speaker.wave.2")
+                    .frame(width: 18, height: 18)
+            }
+            .buttonStyle(.borderless)
+            .help(model.isReadingScriptAloud ? "Stop speech preview" : "Preview speech")
+            .accessibilityLabel(model.isReadingScriptAloud ? "Stop speech preview" : "Preview speech")
+        } content: {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Text("Voice")
+                        .frame(width: rowLabelWidth, alignment: .leading)
+                    Picker("", selection: $model.speechVoiceIdentifier) {
+                        Text("Auto (\(model.effectiveTranscriptLanguageLabel))").tag("auto")
+                        ForEach(model.filteredSpeechVoices, id: \.identifier) { voice in
+                            Text("\(voice.name) (\(voice.language))").tag(voice.identifier)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    Spacer(minLength: 0)
+                }
+
+                sliderRow(
+                    title: "Speech rate",
+                    valueText: String(format: "%.2f", model.speechRate),
+                    slider: Slider(value: $model.speechRate, in: PrompterModel.speechRateRange, step: 0.01)
+                )
+
+                sliderRow(
+                    title: "Pitch",
+                    valueText: String(format: "%.1fx", model.speechPitch),
+                    slider: Slider(value: $model.speechPitch, in: PrompterModel.speechPitchRange, step: 0.1)
+                )
+
+                sliderRow(
+                    title: "Volume",
+                    valueText: "\(Int((model.speechVolume * 100).rounded()))%",
+                    slider: Slider(value: $model.speechVolume, in: PrompterModel.speechVolumeRange, step: 0.05)
+                )
+            }
+        }
+    }
+
     private func clampedTimeBinding(_ binding: Binding<Double>, upper: Double) -> Binding<Double> {
         Binding(
             get: { min(max(binding.wrappedValue, 1), max(upper, 1)) },
             set: { binding.wrappedValue = min(max($0.rounded(), 1), max(upper, 1)) }
         )
+    }
+
+    private func normalizeSpeechVoiceSelection() {
+        guard model.speechVoiceIdentifier != "auto",
+              !model.filteredSpeechVoices.contains(where: { $0.identifier == model.speechVoiceIdentifier }) else {
+            return
+        }
+        model.speechVoiceIdentifier = "auto"
     }
 
     private var scriptEditorResizeHandle: some View {
@@ -644,17 +718,45 @@ private struct LoadLinkSheet: View {
     }
 }
 
-private struct SettingsSection<Content: View>: View {
+private struct SettingsSection<Content: View, Accessory: View>: View {
     let title: String
+    @ViewBuilder var accessory: Accessory
     @ViewBuilder var content: Content
 
+    init(
+        title: String,
+        @ViewBuilder content: () -> Content
+    ) where Accessory == EmptyView {
+        self.title = title
+        self.accessory = EmptyView()
+        self.content = content()
+    }
+
+    init(
+        title: String,
+        @ViewBuilder accessory: () -> Accessory,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.title = title
+        self.accessory = accessory()
+        self.content = content()
+    }
+
     var body: some View {
-        GroupBox(label: Text(title).font(.headline)) {
+        GroupBox(label: header) {
             VStack(alignment: .leading, spacing: 12) {
                 content
             }
             .padding(.top, 2)
             .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private var header: some View {
+        HStack(spacing: 8) {
+            Text(title)
+                .font(.headline)
+            accessory
         }
     }
 }

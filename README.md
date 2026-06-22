@@ -38,6 +38,10 @@ timer, and keeps language or voice status pinned to the bottom status area.
 - In voice or transcript mode, fresh playback waits for speech before moving the prompt. Manual pause blocks voice/transcript-driven resume until the presenter explicitly resumes.
 - Presentation timing aid with optional timer display, colored time warnings, a 5 Hz blinking yellow warning state, and red timeout state.
 - Timer values start green, turn blinking yellow near the configured warning point, and turn red after the configured limit. The timer resets only when Reset is pressed.
+- Text to Speech controls read from the current prompt anchor and follow Play in loops when enabled.
+- Text to Speech settings include voice, speech rate, pitch, volume, and a speaker preview button that uses the current options.
+- Text to Speech voice lists are filtered by the selected script/recognition language group, so Chinese scripts show Chinese voices and English scripts show English voices.
+- Text to Speech pauses and resumes with presentation playback; Reset and end-of-script stop read-aloud.
 - Version display in Settings.
 
 ### macOS
@@ -65,11 +69,13 @@ timer, and keeps language or voice status pinned to the bottom status area.
 - Settings is the landing window; a floating `Present` button switches immediately into full-screen prompting.
 - Native iOS Presentation Script editor supports normal editing, keyboard input, select all, copy, and paste. Tapping the title or using the keyboard Done control hides the keyboard.
 - Full-screen prompt mode reserves top control space and a bottom status line, so prompt text does not overlap controls or recognition status in portrait or landscape.
-- Prompt screen taps mirror the macOS click zones: left third jumps back, middle pauses/resumes, and right third jumps forward. Back and forward controls move by the configured line pace; double taps move twice that pace.
-- Standalone prompt controls are grouped together and include play/pause, reset, back, forward, settings, paste, and clear.
+- Prompt screen taps mirror the macOS click zones: left third jumps back, middle pauses/resumes, and right third jumps forward. Double taps move twice the configured line pace.
+- Standalone prompt controls are grouped together and include play/pause, reset, Text to Speech, and settings.
 - The settings button returns to Settings without stopping the presentation timer.
 - Floating prompt controls can be moved so they do not block the camera view.
 - Toolbar opacity controls the prompt button cluster opacity.
+- Paste and clear actions live above the script editor in Settings instead of on the prompt toolbar.
+- Text to Speech voice selection uses a scrollable voice sheet filtered to the current script language.
 - Manual pause fades the script and shows `Presentation paused, click Play again to resume` with a play icon.
 - Voice level is shown directly in the prompt as `Voice: xx dB` when voice pause/resume is enabled.
 - When voice-driven pause/resume is enabled, a fresh start waits after countdown and shows `Start talking to move prompt forward`.
@@ -90,7 +96,7 @@ timer, and keeps language or voice status pinned to the bottom status area.
 
 ## Version
 
-Current version: V1.0.113.
+Current version: V1.0.149.
 
 ## Install (Recommended)
 

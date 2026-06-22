@@ -157,6 +157,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             model.$timeWarningRedThresholdMinutes.map { _ in () }.eraseToAnyPublisher(),
             model.$timerOverlayOffsetX.map { _ in () }.eraseToAnyPublisher(),
             model.$timerOverlayOffsetY.map { _ in () }.eraseToAnyPublisher(),
+            model.$speechVoiceIdentifier.map { _ in () }.eraseToAnyPublisher(),
+            model.$speechRate.map { _ in () }.eraseToAnyPublisher(),
+            model.$speechPitch.map { _ in () }.eraseToAnyPublisher(),
+            model.$speechVolume.map { _ in () }.eraseToAnyPublisher(),
             model.$selectedScreenID.map { _ in () }.eraseToAnyPublisher()
         ]
 

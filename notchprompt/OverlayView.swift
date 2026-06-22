@@ -252,7 +252,9 @@ struct OverlayView: View {
                 timerIndicator
             }
 
-            if model.isManuallyPaused {
+            if model.didResetPrompt {
+                promptInfoCard(symbol: "play.fill", text: "Presentation reset, click Play again to start")
+            } else if model.isManuallyPaused {
                 promptInfoCard(symbol: "play.fill", text: "Presentation paused, click Play again to resume")
             }
 
@@ -301,11 +303,11 @@ struct OverlayView: View {
                         }
 
                         OverlayControlButton(
-                            symbol: "trash",
-                            tooltip: "Clear script",
+                            symbol: model.isReadingScriptAloud ? "speaker.wave.2.fill" : "speaker.wave.2",
+                            tooltip: model.isReadingScriptAloud ? "Stop reading script" : "Read script aloud",
                             onTooltipChange: setTooltip
                         ) {
-                            model.script = ""
+                            model.toggleReadScriptAloud()
                         }
 
                         OverlayControlButton(
