@@ -140,8 +140,11 @@ final class IOSLocalMicrophoneVoiceMonitor: ObservableObject {
 
         do {
             let session = AVAudioSession.sharedInstance()
-            try session.setCategory(.playAndRecord, mode: .measurement, options: [.mixWithOthers, .allowBluetoothHFP])
+            try session.setCategory(.playAndRecord, mode: .measurement, options: [.mixWithOthers, .defaultToSpeaker])
+            try? session.setPreferredIOBufferDuration(0.02)
+            try? session.setPreferredSampleRate(44_100)
             try session.setActive(true)
+            selectBuiltInMicrophoneIfAvailable(session)
         } catch {
             unavailableMessage = "Could not activate local microphone monitoring."
             return
@@ -212,9 +215,8 @@ final class IOSLocalMicrophoneVoiceMonitor: ObservableObject {
 
         let request = SFSpeechAudioBufferRecognitionRequest()
         request.shouldReportPartialResults = true
-        request.taskHint = .dictation
+        request.taskHint = .search
         request.addsPunctuation = false
-        request.requiresOnDeviceRecognition = recognizer.supportsOnDeviceRecognition
         recognitionRequest = request
         shouldRestartRecognition = false
         recognitionStartAudioSeconds = audioStreamSeconds
@@ -241,21 +243,6 @@ final class IOSLocalMicrophoneVoiceMonitor: ObservableObject {
                     transcript.count
                 )
                 #endif
-                if self.shouldRestartRecognitionForBacklog(recognizerBacklogSeconds) {
-                    #if DEBUG
-                    NSLog(
-                        "PCompanionPerf speech restartForBacklog %.2fs stream=%.2fs segmentEnd=%.2fs locale=%@",
-                        recognizerBacklogSeconds,
-                        self.audioStreamSeconds,
-                        segmentEndAudioSeconds,
-                        self.recognitionLocaleIdentifier
-                    )
-                    #endif
-                    self.shouldRestartRecognition = self.isMonitoring && self.transcriptTrackingEnabled
-                    self.stopRecognition()
-                    self.restartRecognitionIfNeeded(delay: 0.05)
-                    return
-                }
                 Task { @MainActor in
                     self.recognizedTranscript = transcript
                     if let wordsPerMinute {
@@ -277,11 +264,6 @@ final class IOSLocalMicrophoneVoiceMonitor: ObservableObject {
             return recognitionStartAudioSeconds
         }
         return recognitionStartAudioSeconds + lastSegment.timestamp + lastSegment.duration
-    }
-
-    private func shouldRestartRecognitionForBacklog(_ backlogSeconds: TimeInterval) -> Bool {
-        guard transcriptTrackingEnabled, backlogSeconds > 3.0 else { return false }
-        return Date().timeIntervalSince(lastRecognitionRestartDate) > 2.0
     }
 
     private func stopRecognition() {
@@ -310,6 +292,11 @@ final class IOSLocalMicrophoneVoiceMonitor: ObservableObject {
               segments.count >= 2 else { return nil }
         let duration = max(1, (last.timestamp + last.duration) - first.timestamp)
         return Double(segments.count) / duration * 60
+    }
+
+    private func selectBuiltInMicrophoneIfAvailable(_ session: AVAudioSession) {
+        guard let builtInMic = session.availableInputs?.first(where: { $0.portType == .builtInMic }) else { return }
+        try? session.setPreferredInput(builtInMic)
     }
 
     private func applyRecognitionLocale() {

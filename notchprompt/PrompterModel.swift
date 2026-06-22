@@ -635,8 +635,7 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
             return scriptProgress(at: transcriptMatchedTokenIndex, in: scriptTokens)
         }
 
-        var matchedIndex = anchorIndex
-        var matchedTranscriptEnd = transcriptConsumedTokenCount
+        var bestMatch: (scriptStart: Int, matchedIndex: Int, transcriptEnd: Int, runLength: Int)?
         let overlap = transcriptMatchedTokenIndex < 0 || !isCurrentAnchorVisible ? 0 : 2
         let transcriptSearchStart = max(0, transcriptConsumedTokenCount - overlap)
 
@@ -653,19 +652,28 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
                 let transcriptEnd = transcriptStart + runLength
                 guard runLength >= transcriptMatchConsecutiveWords, transcriptEnd > transcriptConsumedTokenCount else { continue }
                 let cappedIndex = min(scriptStart + runLength - 1, searchEnd - 1)
-                guard cappedIndex > matchedIndex else { continue }
-                matchedIndex = cappedIndex
-                matchedTranscriptEnd = transcriptEnd
-                break
-            }
-            if matchedIndex > anchorIndex {
-                break
+                guard cappedIndex > anchorIndex else { continue }
+                let candidate = (scriptStart: scriptStart, matchedIndex: cappedIndex, transcriptEnd: transcriptEnd, runLength: runLength)
+                if let current = bestMatch {
+                    if candidate.scriptStart < current.scriptStart ||
+                        (candidate.scriptStart == current.scriptStart && candidate.runLength > current.runLength) ||
+                        (candidate.scriptStart == current.scriptStart && candidate.runLength == current.runLength && candidate.transcriptEnd < current.transcriptEnd) {
+                        bestMatch = candidate
+                    }
+                } else {
+                    bestMatch = candidate
+                }
             }
         }
 
+        guard let bestMatch else {
+            guard transcriptMatchedTokenIndex >= 0 else { return (0, 0) }
+            return scriptProgress(at: transcriptMatchedTokenIndex, in: scriptTokens)
+        }
+        let matchedIndex = bestMatch.matchedIndex
         guard matchedIndex >= 0 else { return (0, 0) }
         transcriptMatchedTokenIndex = matchedIndex
-        transcriptConsumedTokenCount = max(transcriptConsumedTokenCount, matchedTranscriptEnd)
+        transcriptConsumedTokenCount = max(transcriptConsumedTokenCount, bestMatch.transcriptEnd)
         return scriptProgress(at: matchedIndex, in: scriptTokens)
     }
 

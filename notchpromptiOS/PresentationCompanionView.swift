@@ -189,6 +189,7 @@ struct PresentationCompanionView: View {
     @State private var transcriptVisibleUTF16Range: Range<Int> = 0..<Int.max
     @State private var scriptTokenCache: [ScriptTokenInfo] = []
     @State private var scriptLineEndOffsetCache: [Int] = []
+    @State private var renderedPromptHeightCache: [Int: CGFloat] = [:]
     @State private var previousRecognizedTranscript = ""
     @State private var recognizedTranscriptDisplayLine = ""
     @State private var countdownTask: Task<Void, Never>?
@@ -265,7 +266,7 @@ struct PresentationCompanionView: View {
                 UserDefaults.standard.set(false, forKey: "isPresentationModeActive")
                 UserDefaults.standard.set(true, forKey: "shouldShowSettingsSurface")
                 viewportHeight = proxy.size.height
-                promptTextWidth = max(proxy.size.width - 48, 1)
+                setPromptTextWidth(max(proxy.size.width - 48, 1))
                 refreshDetectedTranscriptLanguage()
                 refreshScriptAnalysis()
                 migrateLineBasedPlaybackDefaultsIfNeeded()
@@ -323,6 +324,9 @@ struct PresentationCompanionView: View {
         }
         .onChange(of: timeWarningRedThresholdMinutes) { _, _ in
             normalizeTimeWarningSettings()
+        }
+        .onChange(of: fontSize) { _, _ in
+            renderedPromptHeightCache.removeAll()
         }
         .onChange(of: voiceDetectionThresholdDb) { _, thresholdDb in
             voiceMonitor.voiceDetectionThresholdDb = thresholdDb
@@ -535,7 +539,7 @@ struct PresentationCompanionView: View {
             .clipped()
             .onAppear {
                 viewportHeight = viewportProxy.size.height
-                promptTextWidth = max(viewportProxy.size.width - 48, 1)
+                setPromptTextWidth(max(viewportProxy.size.width - 48, 1))
                 clampScroll()
             }
             .onChange(of: viewportProxy.size.height) { _, height in
@@ -543,7 +547,7 @@ struct PresentationCompanionView: View {
                 clampScroll()
             }
             .onChange(of: viewportProxy.size.width) { _, width in
-                promptTextWidth = max(width - 48, 1)
+                setPromptTextWidth(max(width - 48, 1))
                 clampScroll()
             }
             .contentShape(Rectangle())
@@ -1443,6 +1447,14 @@ struct PresentationCompanionView: View {
     private func refreshScriptAnalysis() {
         scriptTokenCache = scriptTokenInfos(in: script)
         scriptLineEndOffsetCache = lineEndOffsets(in: script)
+        renderedPromptHeightCache.removeAll()
+    }
+
+    private func setPromptTextWidth(_ width: CGFloat) {
+        let clamped = max(width, 1)
+        guard abs(promptTextWidth - clamped) > 0.5 else { return }
+        promptTextWidth = clamped
+        renderedPromptHeightCache.removeAll()
     }
 
     private func transcriptLanguageLabel(for identifier: String) -> String {
@@ -1698,8 +1710,8 @@ struct PresentationCompanionView: View {
         let maxOffset = max(contentHeight - viewportHeight, 0)
         guard maxOffset > 0 else { return }
         let spokenBottom = renderedPromptHeight(upToUTF16Offset: spokenCharacterEnd)
-        let bottomThirdThreshold = scrollOffset + (promptViewportHeight * (2.0 / 3.0))
-        guard spokenBottom >= bottomThirdThreshold else { return }
+        let secondHalfThreshold = scrollOffset + (promptViewportHeight * 0.5)
+        guard spokenBottom >= secondHalfThreshold else { return }
         let targetOffset = spokenBottom - promptLineHeight
         guard targetOffset > scrollOffset + 2 else { return }
         scrollOffset = min(max(targetOffset, 0), maxOffset)
@@ -1767,8 +1779,7 @@ struct PresentationCompanionView: View {
             return scriptProgress(at: transcriptMatchedTokenIndex, in: scriptTokens)
         }
 
-        var matchedIndex = anchorIndex
-        var matchedTranscriptEnd = transcriptConsumedTokenCount
+        var bestMatch: (scriptStart: Int, matchedIndex: Int, transcriptEnd: Int, runLength: Int)?
         let overlap = transcriptMatchedTokenIndex < 0 || !isCurrentAnchorVisible ? 0 : 2
         let transcriptSearchStart = max(0, transcriptConsumedTokenCount - overlap)
 
@@ -1785,19 +1796,28 @@ struct PresentationCompanionView: View {
                 let transcriptEnd = transcriptStart + runLength
                 guard runLength >= transcriptMatchConsecutiveWords, transcriptEnd > transcriptConsumedTokenCount else { continue }
                 let cappedIndex = min(scriptStart + runLength - 1, searchEnd - 1)
-                guard cappedIndex > matchedIndex else { continue }
-                matchedIndex = cappedIndex
-                matchedTranscriptEnd = transcriptEnd
-                break
-            }
-            if matchedIndex > anchorIndex {
-                break
+                guard cappedIndex > anchorIndex else { continue }
+                let candidate = (scriptStart: scriptStart, matchedIndex: cappedIndex, transcriptEnd: transcriptEnd, runLength: runLength)
+                if let current = bestMatch {
+                    if candidate.scriptStart < current.scriptStart ||
+                        (candidate.scriptStart == current.scriptStart && candidate.runLength > current.runLength) ||
+                        (candidate.scriptStart == current.scriptStart && candidate.runLength == current.runLength && candidate.transcriptEnd < current.transcriptEnd) {
+                        bestMatch = candidate
+                    }
+                } else {
+                    bestMatch = candidate
+                }
             }
         }
 
+        guard let bestMatch else {
+            guard transcriptMatchedTokenIndex >= 0 else { return (0, 0) }
+            return scriptProgress(at: transcriptMatchedTokenIndex, in: scriptTokens)
+        }
+        let matchedIndex = bestMatch.matchedIndex
         guard matchedIndex >= 0 else { return (0, 0) }
         transcriptMatchedTokenIndex = matchedIndex
-        transcriptConsumedTokenCount = max(transcriptConsumedTokenCount, matchedTranscriptEnd)
+        transcriptConsumedTokenCount = max(transcriptConsumedTokenCount, bestMatch.transcriptEnd)
         #if DEBUG
         traceMatchedIndex = matchedIndex
         #endif
@@ -1890,6 +1910,9 @@ struct PresentationCompanionView: View {
         let nsScript = script as NSString
         let clampedOffset = min(max(utf16Offset, 0), nsScript.length)
         guard clampedOffset > 0 else { return 0 }
+        if let cached = renderedPromptHeightCache[clampedOffset] {
+            return cached
+        }
 
         let prefix = nsScript.substring(with: NSRange(location: 0, length: clampedOffset)) as NSString
         let style = NSMutableParagraphStyle()
@@ -1906,7 +1929,9 @@ struct PresentationCompanionView: View {
             attributes: attributes,
             context: nil
         )
-        return ceil(rect.height)
+        let height = ceil(rect.height)
+        renderedPromptHeightCache[clampedOffset] = height
+        return height
     }
 
     private func roundedPromptFont(ofSize fontSize: CGFloat, weight: UIFont.Weight) -> UIFont {
