@@ -24,6 +24,7 @@ struct ScrollingTextView: View {
     let transcriptSpokenCharacterEnd: Int
     let transcriptProgressAllowsBackward: Bool
     let transcriptDrivenScrolling: Bool
+    let transcriptScrollUponRemainingLines: Int
     let fadeFraction: CGFloat
     let backgroundOpacity: Double
     let isHovering: Bool
@@ -370,13 +371,38 @@ struct ScrollingTextView: View {
 
     private func applyTranscriptProgress() {
         let spokenBottom = renderedHeight(upToUTF16Offset: transcriptSpokenCharacterEnd)
-        let secondHalfThreshold = phase + (viewportHeight * 0.5)
-        guard spokenBottom >= secondHalfThreshold else { return }
-        let target = spokenBottom - max(fontSize * 1.35, 1)
+        let lineHeight = promptLineHeight
+        let remainingLines = CGFloat(max(transcriptScrollUponRemainingLines, 1))
+        let threshold = phase + max(viewportHeight - (remainingLines * lineHeight), 0)
+        guard spokenBottom >= threshold else { return }
+        let contextOffset = utf16OffsetBeforeMatchedContext(keepingWords: 10)
+        let target = renderedHeight(upToUTF16Offset: contextOffset)
         guard transcriptProgressAllowsBackward || target > phase else { return }
         hasReachedEndInStopMode = false
         deferredStopTargetPhase = nil
         phase = min(max(target, topOfScriptPhaseFloor), endPhase)
+    }
+
+    private var promptLineHeight: CGFloat {
+        max(fontSize * 1.35, 1)
+    }
+
+    private func utf16OffsetBeforeMatchedContext(keepingWords wordCount: Int) -> Int {
+        let nsText = text as NSString
+        let clampedEnd = min(max(transcriptSpokenCharacterEnd, 0), nsText.length)
+        guard clampedEnd > 0, wordCount > 0 else { return 0 }
+
+        let range = NSRange(location: 0, length: clampedEnd)
+        var tokenRanges: [NSRange] = []
+        nsText.enumerateSubstrings(in: range, options: [.byWords, .substringNotRequired]) { _, tokenRange, _, _ in
+            tokenRanges.append(tokenRange)
+        }
+
+        if tokenRanges.count > wordCount {
+            return tokenRanges[tokenRanges.count - wordCount].location
+        }
+
+        return 0
     }
 
     private func reportVisibleRangeIfNeeded() {

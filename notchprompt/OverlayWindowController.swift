@@ -116,16 +116,9 @@ final class OverlayWindowController: NSObject {
         super.init()
 
         reposition()
-
-#if DEBUG
-        debugDump(reason: "init-after-reposition", intendedScreen: targetScreen(), calc: nil)
-#endif
     }
 
     func setVisible(_ isVisible: Bool) {
-#if DEBUG
-        debugDump(reason: "setVisible-before isVisible=\(isVisible)", intendedScreen: targetScreen(), calc: nil)
-#endif
         if isVisible {
             reposition()
             panel.level = Self.overlayLevel
@@ -134,9 +127,6 @@ final class OverlayWindowController: NSObject {
         } else {
             panel.orderOut(nil)
         }
-#if DEBUG
-        debugDump(reason: "setVisible-after isVisible=\(isVisible)", intendedScreen: targetScreen(), calc: nil)
-#endif
     }
 
     func reposition() {
@@ -147,28 +137,12 @@ final class OverlayWindowController: NSObject {
         let desiredHeight = CGFloat(model.overlayHeight)
 
         let height = desiredHeight
-        let topRefY = screen.frame.maxY
         let targetFrame = OverlayGeometry.centeredTopFrame(
             screenFrame: screen.frame,
             width: width,
             height: height,
             padding: padding
         )
-
-#if DEBUG
-        debugDump(
-            reason: "reposition-pre",
-            intendedScreen: screen,
-            calc: Calc(
-                width: width,
-                height: height,
-                padding: padding,
-                x: targetFrame.origin.x,
-                y: targetFrame.origin.y,
-                topSafeY: topRefY
-            )
-        )
-#endif
 
         if let lastFrame, lastFrame.equalTo(targetFrame) {
             return
@@ -181,21 +155,6 @@ final class OverlayWindowController: NSObject {
         
         panel.level = Self.overlayLevel
         panel.alphaValue = 1.0
-
-#if DEBUG
-        debugDump(
-            reason: "reposition-post",
-            intendedScreen: screen,
-            calc: Calc(
-                width: width,
-                height: height,
-                padding: padding,
-                x: targetFrame.origin.x,
-                y: targetFrame.origin.y,
-                topSafeY: topRefY
-            )
-        )
-#endif
     }
 
     func scheduleReposition() {
@@ -208,13 +167,6 @@ final class OverlayWindowController: NSObject {
 
     func setPrivacyMode(_ enabled: Bool) {
         panel.sharingType = enabled ? .none : .readOnly
-#if DEBUG
-        debugDump(
-            reason: "setPrivacyMode enabled=\(enabled) sharingType=\(panel.sharingType.rawValue)",
-            intendedScreen: targetScreen(),
-            calc: nil
-        )
-#endif
     }
 
     private func targetScreen() -> NSScreen? {
@@ -250,49 +202,3 @@ final class OverlayWindowController: NSObject {
         return CGDirectDisplayID(n.uint32Value)
     }
 }
-
-#if DEBUG
-private extension OverlayWindowController {
-    struct Calc {
-        let width: CGFloat
-        let height: CGFloat
-        let padding: CGFloat
-        let x: CGFloat
-        let y: CGFloat
-        let topSafeY: CGFloat
-    }
-
-    func debugDump(reason: String, intendedScreen: NSScreen?, calc: Calc?) {
-        let level = panel.level
-
-        let intendedName = intendedScreen?.localizedName ?? "nil"
-        let intendedFrame = intendedScreen?.frame.debugDescription ?? "nil"
-        let intendedVisible = intendedScreen?.visibleFrame.debugDescription ?? "nil"
-        let reservedTop: CGFloat = {
-            guard let s = intendedScreen else { return .nan }
-            return max(0, s.frame.maxY - s.visibleFrame.maxY)
-        }()
-
-        let panelFrame = panel.frame
-        let panelMaxY = panelFrame.maxY
-
-        let actualScreen = NSScreen.screens.first {
-            $0.frame.contains(NSPoint(x: panelFrame.midX, y: panelFrame.midY))
-        }
-        let actualName = actualScreen?.localizedName ?? "nil"
-        let actualFrame = actualScreen?.frame.debugDescription ?? "nil"
-        let actualVisible = actualScreen?.visibleFrame.debugDescription ?? "nil"
-        print("[Notchprompt][Overlay] reason=\(reason)")
-        print("level=\(String(describing: level))(raw=\(level.rawValue)) ignoresMouseEvents=\(panel.ignoresMouseEvents)")
-        print("panel.frame=\(panelFrame.debugDescription) panel.maxY=\(panelMaxY)")
-        print("screen(name=\(intendedName), frame=\(intendedFrame), visible=\(intendedVisible), reservedTop=\(reservedTop))")
-        if let calc {
-            print("calc(width=\(calc.width), height=\(calc.height), padding=\(calc.padding), x=\(calc.x), y=\(calc.y), topSafeY=\(calc.topSafeY))")
-        } else {
-            print("calc(nil)")
-        }
-        print("actualScreen(name=\(actualName), frame=\(actualFrame), visible=\(actualVisible))")
-        // Overlapping the reserved top region is expected when we intentionally cover the notch/menu bar area.
-    }
-}
-#endif

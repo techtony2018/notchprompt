@@ -28,9 +28,7 @@ final class IOSLocalMicrophoneVoiceMonitor: ObservableObject {
     private var lastVoiceDate = Date.distantPast
     private var lastPeakDate = Date.distantPast
     private var lastMeterDate = Date.distantPast
-    private var lastAudioBufferDate = Date.distantPast
     private var audioStreamSeconds: TimeInterval = 0
-    private var recognitionStartAudioSeconds: TimeInterval = 0
     private var lastRecognitionRestartDate = Date.distantPast
     private var recentPeakDates: [Date] = []
     private var wasAbovePeakThreshold = false
@@ -111,9 +109,7 @@ final class IOSLocalMicrophoneVoiceMonitor: ObservableObject {
         lastVoiceDate = .distantPast
         lastPeakDate = .distantPast
         lastMeterDate = .distantPast
-        lastAudioBufferDate = .distantPast
         audioStreamSeconds = 0
-        recognitionStartAudioSeconds = 0
         lastRecognitionRestartDate = .distantPast
         recentPeakDates.removeAll()
         wasAbovePeakThreshold = false
@@ -127,7 +123,6 @@ final class IOSLocalMicrophoneVoiceMonitor: ObservableObject {
         recentPeakDates.removeAll()
         lastPeakDate = .distantPast
         wasAbovePeakThreshold = false
-        recognitionStartAudioSeconds = audioStreamSeconds
         lastRecognitionRestartDate = Date()
 
         guard isMonitoring, transcriptTrackingEnabled else { return }
@@ -159,7 +154,6 @@ final class IOSLocalMicrophoneVoiceMonitor: ObservableObject {
 
         input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
             guard let self else { return }
-            self.lastAudioBufferDate = Date()
             self.audioStreamSeconds += TimeInterval(buffer.frameLength) / max(buffer.format.sampleRate, 1)
             self.recognitionRequest?.append(buffer)
             self.process(buffer)
@@ -219,30 +213,11 @@ final class IOSLocalMicrophoneVoiceMonitor: ObservableObject {
         request.addsPunctuation = false
         recognitionRequest = request
         shouldRestartRecognition = false
-        recognitionStartAudioSeconds = audioStreamSeconds
         recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
             guard let self else { return }
             if let result {
                 let transcript = result.bestTranscription.formattedString
                 let wordsPerMinute = self.wordsPerMinute(from: result.bestTranscription.segments)
-                let segmentEndAudioSeconds = self.segmentEndAudioSeconds(for: result)
-                let recognizerBacklogSeconds = self.audioStreamSeconds - segmentEndAudioSeconds
-                #if DEBUG
-                let audioLag = Date().timeIntervalSince(self.lastAudioBufferDate)
-                NSLog(
-                    "PCompanionPerf speech partial=%@ final=%@ onDevice=%@ callbackLag=%.2fs recognizerBacklog=%.2fs stream=%.2fs segmentEnd=%.2fs locale=%@ segments=%d chars=%d",
-                    String(!result.isFinal),
-                    String(result.isFinal),
-                    String(request.requiresOnDeviceRecognition),
-                    audioLag,
-                    recognizerBacklogSeconds,
-                    self.audioStreamSeconds,
-                    segmentEndAudioSeconds,
-                    self.recognitionLocaleIdentifier,
-                    result.bestTranscription.segments.count,
-                    transcript.count
-                )
-                #endif
                 Task { @MainActor in
                     self.recognizedTranscript = transcript
                     if let wordsPerMinute {
@@ -257,13 +232,6 @@ final class IOSLocalMicrophoneVoiceMonitor: ObservableObject {
                 self.restartRecognitionIfNeeded(delay: 0.2)
             }
         }
-    }
-
-    private func segmentEndAudioSeconds(for result: SFSpeechRecognitionResult) -> TimeInterval {
-        guard let lastSegment = result.bestTranscription.segments.last else {
-            return recognitionStartAudioSeconds
-        }
-        return recognitionStartAudioSeconds + lastSegment.timestamp + lastSegment.duration
     }
 
     private func stopRecognition() {

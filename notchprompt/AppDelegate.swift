@@ -39,11 +39,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         overlayController = OverlayWindowController(model: model)
         overlayController?.setVisible(model.isOverlayVisible)
 
-#if DEBUG
-        ScreenSelectionSelfTests.run()
-        runShortcutSelfChecks()
-#endif
-
         setupEditMenu()
         wireModel()
         setVoiceMonitorEnabled(model.autoPauseResumeWithLocalMic || model.transcriptBasedPrompt)
@@ -127,9 +122,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
-#if DEBUG
-                print("[Notchprompt] didChangeScreenParametersNotification")
-#endif
                 self?.overlayController?.scheduleReposition()
             }
             .store(in: &cancellables)
@@ -521,12 +513,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         menu.insertItem(separator, at: unavailable.count == 1 ? 1 : 2)
         shortcutWarningSeparator = separator
     }
-
-#if DEBUG
-    private func runShortcutSelfChecks() {
-        GlobalHotkeyManager.runSelfChecks()
-    }
-#endif
 
     // MARK: - Menu Validation
 

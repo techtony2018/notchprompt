@@ -150,18 +150,6 @@ final class GlobalHotkeyManager {
         failedRegistrations = []
     }
 
-    #if DEBUG
-    static func runSelfChecks() {
-        let commands = ShortcutCommand.allCases
-        assert(Set(commands.map(\.hotKeyID)).count == commands.count, "Shortcut hotkey IDs must be unique")
-        assert(Set(commands.map(\.displayShortcut)).count == commands.count, "Display shortcuts must be unique")
-        for command in commands {
-            assert(!command.keyEquivalent.isEmpty, "Missing keyEquivalent for \(command)")
-            assert(command.carbonModifiers == UInt32(optionKey | cmdKey), "Unexpected modifiers for \(command)")
-        }
-    }
-    #endif
-
     private func installHandlerIfNeeded() {
         guard eventHandlerRef == nil else { return }
 

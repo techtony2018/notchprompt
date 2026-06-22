@@ -6,70 +6,9 @@
 import SwiftUI
 import Combine
 import Darwin
-import os
 import UIKit
 
-private let presentationLogger = Logger(subsystem: "notch.presentation-companion", category: "Presentation")
 private let timingAidMinutesRange: ClosedRange<Double> = 1...100
-
-private func presentationLog(_ message: String) {
-    NSLog("Presentation Companion: %@", message)
-    presentationLogger.notice("\(message, privacy: .public)")
-}
-
-#if DEBUG
-private final class IOSPerformanceTrace {
-    static let shared = IOSPerformanceTrace()
-
-    private var tickCount = 0
-    private var lastTickReport = CACurrentMediaTime()
-    private var lastTranscriptReport = CACurrentMediaTime()
-
-    func recordTick(
-        isRunning: Bool,
-        transcriptBasedPrompt: Bool,
-        isPresentationModeActive: Bool,
-        shouldShowSettingsSurface: Bool
-    ) {
-        tickCount += 1
-        let now = CACurrentMediaTime()
-        guard now - lastTickReport >= 1 else { return }
-        let ticksPerSecond = Double(tickCount) / max(now - lastTickReport, 0.001)
-        NSLog(
-            "PCompanionPerf tick %.1f/s running=%@ speech=%@ presentation=%@ settings=%@",
-            ticksPerSecond,
-            String(isRunning),
-            String(transcriptBasedPrompt),
-            String(isPresentationModeActive),
-            String(shouldShowSettingsSurface)
-        )
-        tickCount = 0
-        lastTickReport = now
-    }
-
-    func recordTranscriptMatch(
-        durationMs: Double,
-        transcriptTokens: Int,
-        scriptTokens: Int,
-        visibleTokens: Int,
-        searchTokens: Int,
-        matchedIndex: Int
-    ) {
-        let now = CACurrentMediaTime()
-        guard durationMs >= 8 || now - lastTranscriptReport >= 1 else { return }
-        NSLog(
-            "PCompanionPerf transcript %.2fms transcriptTokens=%d scriptTokens=%d visibleTokens=%d searchTokens=%d matchedIndex=%d",
-            durationMs,
-            transcriptTokens,
-            scriptTokens,
-            visibleTokens,
-            searchTokens,
-            matchedIndex
-        )
-        lastTranscriptReport = now
-    }
-}
-#endif
 
 private enum IOSScrollMode: String, CaseIterable {
     case infinite
@@ -176,6 +115,7 @@ struct PresentationCompanionView: View {
     @AppStorage("ios.transcriptLanguageIdentifier") private var transcriptLanguageIdentifier = "auto"
     @AppStorage("ios.transcriptMatchConsecutiveWords") private var transcriptMatchConsecutiveWords = 3
     @AppStorage("ios.transcriptMaxForwardLookingWords") private var transcriptMaxForwardLookingWords = 20
+    @AppStorage("ios.transcriptScrollUponRemainingLines") private var transcriptScrollUponRemainingLines = 2
     @AppStorage("ios.fuzzyTranscriptMatching") private var fuzzyTranscriptMatching = true
     @State private var detectedTranscriptLanguageIdentifier = "en-US"
     @AppStorage("ios.voiceDetectionThresholdDb") private var voiceDetectionThresholdDb = -30.0
@@ -613,7 +553,7 @@ struct PresentationCompanionView: View {
                 .fill(.white.opacity(0.10))
                 .frame(height: 1)
         }
-        .allowsHitTesting(false)
+        .contentShape(Rectangle())
     }
 
     @ViewBuilder
@@ -670,6 +610,8 @@ struct PresentationCompanionView: View {
                 .foregroundStyle(.blue)
                 .font(.system(size: 11, weight: .semibold))
                 .lineLimit(1)
+                .padding(.vertical, 8)
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
         } else {
@@ -1025,6 +967,13 @@ struct PresentationCompanionView: View {
                             )
                             .padding(.leading, 18)
 
+                            Stepper(
+                                "Scroll upon remaining lines: \(transcriptScrollUponRemainingLines)",
+                                value: $transcriptScrollUponRemainingLines,
+                                in: 1...10
+                            )
+                            .padding(.leading, 18)
+
                             Toggle("Fuzzy transcript matching", isOn: $fuzzyTranscriptMatching)
                                 .padding(.leading, 18)
                         }
@@ -1240,14 +1189,6 @@ struct PresentationCompanionView: View {
     }
 
     private func tick(at date: Date) {
-        #if DEBUG
-        IOSPerformanceTrace.shared.recordTick(
-            isRunning: isRunning,
-            transcriptBasedPrompt: transcriptBasedPrompt,
-            isPresentationModeActive: isPresentationModeActive,
-            shouldShowSettingsSurface: shouldShowSettingsSurface
-        )
-        #endif
         guard isRunning else {
             if lastTickDate != nil {
                 lastTickDate = nil
@@ -1305,7 +1246,6 @@ struct PresentationCompanionView: View {
     }
 
     private func togglePlayback() {
-        presentationLog("togglePlayback running=\(isRunning) counting=\(isCountingDown)")
         isScriptFocused = false
         if promptControlShowsPause {
             pauseManually()
@@ -1315,7 +1255,6 @@ struct PresentationCompanionView: View {
     }
 
     private func jump(lines: Double) {
-        presentationLog("jump lines=\(lines)")
         scrollOffset += promptLineHeight * CGFloat(lines)
         clampScroll()
     }
@@ -1332,7 +1271,6 @@ struct PresentationCompanionView: View {
     }
 
     private func resetScroll(resetTimer: Bool = true) {
-        presentationLogger.notice("resetScroll")
         stopPlayback()
         isManuallyPaused = false
         scrollOffset = 0
@@ -1354,14 +1292,12 @@ struct PresentationCompanionView: View {
     }
 
     private func openSettings() {
-        presentationLog("openSettings")
         isScriptFocused = false
         isPresentationModeActive = false
         shouldShowSettingsSurface = true
     }
 
     private func presentFromSettings() {
-        presentationLog("presentFromSettings running=\(isRunning) counting=\(isCountingDown) waiting=\(isWaitingForVoiceStart)")
         isScriptFocused = false
         if isRunning || isCountingDown || isWaitingForVoiceStart {
             isPresentationModeActive = true
@@ -1492,7 +1428,6 @@ struct PresentationCompanionView: View {
     }
 
     private func pauseManually() {
-        presentationLog("pauseManually")
         stopPlayback()
         isManuallyPaused = true
         isPausedByVoiceMonitor = false
@@ -1500,7 +1435,6 @@ struct PresentationCompanionView: View {
     }
 
     private func resumeManually() {
-        presentationLog("resumeManually")
         isVoiceResumeBlockedByManualPause = false
         startPlayback()
     }
@@ -1508,7 +1442,6 @@ struct PresentationCompanionView: View {
     private func startPlayback() {
         guard !isRunning, !isCountingDown else { return }
 
-        presentationLog("startPlayback")
         isPausedByVoiceMonitor = false
         continueStartingPlayback()
     }
@@ -1587,7 +1520,6 @@ struct PresentationCompanionView: View {
     }
 
     private func beginWaitingForMicStart() {
-        presentationLog("beginWaitingForMicStart")
         isCountingDown = false
         countdownRemaining = 0
         shouldUseCountdownOnNextStart = false
@@ -1604,7 +1536,6 @@ struct PresentationCompanionView: View {
     }
 
     private func beginRunningNow() {
-        presentationLog("beginRunningNow")
         isCountingDown = false
         countdownRemaining = 0
         shouldUseCountdownOnNextStart = false
@@ -1622,12 +1553,10 @@ struct PresentationCompanionView: View {
             .map { $0.lowercased() }
 
         guard components.first == "qa" || components.first == "settings" else {
-            presentationLog("handleIncomingURL ignored url=\(url.absoluteString)")
             return
         }
 
         let action = components.dropFirst().first ?? components.first ?? ""
-        presentationLog("handleIncomingURL action=\(action) url=\(url.absoluteString)")
         switch action {
         case "play", "start", "resume":
             resumeManually()
@@ -1710,11 +1639,23 @@ struct PresentationCompanionView: View {
         let maxOffset = max(contentHeight - viewportHeight, 0)
         guard maxOffset > 0 else { return }
         let spokenBottom = renderedPromptHeight(upToUTF16Offset: spokenCharacterEnd)
-        let secondHalfThreshold = scrollOffset + (promptViewportHeight * 0.5)
-        guard spokenBottom >= secondHalfThreshold else { return }
-        let targetOffset = spokenBottom - promptLineHeight
+        let remainingLines = CGFloat(max(transcriptScrollUponRemainingLines, 1))
+        let threshold = scrollOffset + max(promptViewportHeight - (remainingLines * promptLineHeight), 0)
+        guard spokenBottom >= threshold else { return }
+        let contextOffset = transcriptContextUTF16Offset(keepingWords: 10, before: spokenCharacterEnd)
+        let targetOffset = renderedPromptHeight(upToUTF16Offset: contextOffset)
         guard targetOffset > scrollOffset + 2 else { return }
         scrollOffset = min(max(targetOffset, 0), maxOffset)
+    }
+
+    private func transcriptContextUTF16Offset(keepingWords wordCount: Int, before spokenCharacterEnd: Int) -> Int {
+        let scriptTokens = scriptTokenCache.isEmpty ? scriptTokenInfos(in: script) : scriptTokenCache
+        guard !scriptTokens.isEmpty, wordCount > 0 else { return 0 }
+        let clampedEnd = min(max(spokenCharacterEnd, 0), (script as NSString).length)
+        let matchedTokenIndex = scriptTokens.lastIndex { $0.range.upperBound <= clampedEnd } ?? transcriptMatchedTokenIndex
+        guard matchedTokenIndex >= 0, matchedTokenIndex < scriptTokens.count else { return 0 }
+        let contextIndex = max(0, matchedTokenIndex - wordCount + 1)
+        return scriptTokens[contextIndex].range.lowerBound
     }
 
     private func transcriptProgressFraction(for transcript: String) -> Double {
@@ -1722,39 +1663,14 @@ struct PresentationCompanionView: View {
     }
 
     private func transcriptProgress(for transcript: String) -> (lineCompletedFraction: Double, spokenCharacterEnd: Int) {
-        #if DEBUG
-        let traceStart = CACurrentMediaTime()
-        var traceTranscriptTokenCount = 0
-        var traceScriptTokenCount = 0
-        var traceVisibleTokenCount = 0
-        var traceSearchTokenCount = 0
-        var traceMatchedIndex = transcriptMatchedTokenIndex
-        defer {
-            IOSPerformanceTrace.shared.recordTranscriptMatch(
-                durationMs: (CACurrentMediaTime() - traceStart) * 1000,
-                transcriptTokens: traceTranscriptTokenCount,
-                scriptTokens: traceScriptTokenCount,
-                visibleTokens: traceVisibleTokenCount,
-                searchTokens: traceSearchTokenCount,
-                matchedIndex: traceMatchedIndex
-            )
-        }
-        #endif
         let scriptTokens = scriptTokenCache.isEmpty ? scriptTokenInfos(in: script) : scriptTokenCache
         let transcriptTokens = normalizedTokens(transcript)
-        #if DEBUG
-        traceScriptTokenCount = scriptTokens.count
-        traceTranscriptTokenCount = transcriptTokens.count
-        #endif
         guard !scriptTokens.isEmpty, !transcriptTokens.isEmpty else { return (0, 0) }
         if transcriptConsumedTokenCount > transcriptTokens.count {
             transcriptConsumedTokenCount = 0
         }
 
         let visibleTokenRange = visibleTokenRange(in: scriptTokens)
-        #if DEBUG
-        traceVisibleTokenCount = visibleTokenRange.count
-        #endif
         guard visibleTokenRange.lowerBound < visibleTokenRange.upperBound else {
             guard transcriptMatchedTokenIndex >= 0 else { return (0, 0) }
             return scriptProgress(at: transcriptMatchedTokenIndex, in: scriptTokens)
@@ -1771,9 +1687,6 @@ struct PresentationCompanionView: View {
             : visibleTokenRange.lowerBound
         let forwardRangeStart = isCurrentAnchorVisible ? anchorIndex + 1 : visibleTokenRange.lowerBound
         let searchEnd = min(visibleTokenRange.upperBound, forwardRangeStart + transcriptMaxForwardLookingWords)
-        #if DEBUG
-        traceSearchTokenCount = max(searchEnd - searchStart, 0)
-        #endif
         guard searchStart < searchEnd else {
             guard transcriptMatchedTokenIndex >= 0 else { return (0, 0) }
             return scriptProgress(at: transcriptMatchedTokenIndex, in: scriptTokens)
@@ -1818,9 +1731,6 @@ struct PresentationCompanionView: View {
         guard matchedIndex >= 0 else { return (0, 0) }
         transcriptMatchedTokenIndex = matchedIndex
         transcriptConsumedTokenCount = max(transcriptConsumedTokenCount, bestMatch.transcriptEnd)
-        #if DEBUG
-        traceMatchedIndex = matchedIndex
-        #endif
         return scriptProgress(at: matchedIndex, in: scriptTokens)
     }
 
@@ -2180,7 +2090,6 @@ struct PresentationCompanionView: View {
     }
 
     private func handleAppBecameActive() {
-        presentationLog("handleAppBecameActive presentationMode=\(isPresentationModeActive)")
         if isPresentationModeActive {
             shouldShowSettingsSurface = false
         } else {

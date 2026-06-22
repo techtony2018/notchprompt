@@ -36,6 +36,7 @@ struct ContentView: View {
     @State private var scriptEditorResizeStartHeight: Double?
 
     private let rowLabelWidth: CGFloat = 164
+    private let speechScrollLabelWidth: CGFloat = 220
     private let valueWidth: CGFloat = 64
 
     private var promptMode: PromptMode {
@@ -92,6 +93,12 @@ struct ContentView: View {
         }
         .onChange(of: model.transcriptMaxForwardLookingWords) { _, _ in
             model.resetTranscriptProgress()
+        }
+        .onChange(of: model.transcriptScrollUponRemainingLines) { _, value in
+            model.transcriptScrollUponRemainingLines = min(
+                max(value, PrompterModel.transcriptScrollUponRemainingLinesRange.lowerBound),
+                PrompterModel.transcriptScrollUponRemainingLinesRange.upperBound
+            )
         }
         .onChange(of: model.fuzzyTranscriptMatching) { _, _ in
             model.resetTranscriptProgress()
@@ -321,6 +328,19 @@ struct ContentView: View {
                                 "\(model.transcriptMaxForwardLookingWords)",
                                 value: $model.transcriptMaxForwardLookingWords,
                                 in: 5...100
+                            )
+                            .frame(width: 96, alignment: .leading)
+                        }
+                        .padding(.leading, 18)
+
+                        HStack {
+                            Text("Scroll upon remaining lines:")
+                                .lineLimit(1)
+                                .frame(width: speechScrollLabelWidth, alignment: .leading)
+                            Stepper(
+                                "\(model.transcriptScrollUponRemainingLines)",
+                                value: $model.transcriptScrollUponRemainingLines,
+                                in: PrompterModel.transcriptScrollUponRemainingLinesRange
                             )
                             .frame(width: 96, alignment: .leading)
                         }
@@ -594,19 +614,6 @@ private struct SettingsSection<Content: View>: View {
         }
     }
 }
-
-#if DEBUG
-struct ContentView_Previews: PreviewProvider {
-    static var previews: some View {
-        ContentView()
-            .previewDisplayName("Default")
-
-        ContentView()
-            .frame(width: 620, height: 360)
-            .previewDisplayName("Compact Height")
-    }
-}
-#endif
 
 private struct ScrollBounceBehaviorModifier: ViewModifier {
     func body(content: Content) -> some View {
