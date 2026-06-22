@@ -7,7 +7,7 @@ DERIVED_DATA_PATH="$ROOT_DIR/build/release"
 OUTPUT_DIR="$ROOT_DIR/dist"
 APP_PATH="$DERIVED_DATA_PATH/Build/Products/Release/Presentation Companion.app"
 STAGING_DIR="$ROOT_DIR/build/dmg-staging"
-OUTPUT_DMG="$OUTPUT_DIR/notchprompt-${VERSION}-macos.dmg"
+OUTPUT_DMG="$OUTPUT_DIR/presentationcompanion-${VERSION}-macos.dmg"
 VOLUME_NAME="Presentation Companion"
 
 echo "==> Building Release app for ${VERSION}"

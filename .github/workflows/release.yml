@@ -62,7 +62,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.RELEASE_TAG }}
-          files: dist/notchprompt-${{ env.RELEASE_TAG }}-macos.dmg
+          files: dist/presentationcompanion-${{ env.RELEASE_TAG }}-macos.dmg
           body: |
             Install:
             - Open the DMG and drag `Presentation Companion.app` to `/Applications`.
