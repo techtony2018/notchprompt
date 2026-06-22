@@ -472,6 +472,34 @@ struct ContentView: View {
                     valueText: "\(Int((model.backgroundOpacity * 100).rounded()))%",
                     slider: Slider(value: $model.backgroundOpacity, in: 0.08...0.92, step: 0.04)
                 )
+
+                HStack(spacing: 12) {
+                    Text("Background color")
+                        .frame(width: rowLabelWidth, alignment: .leading)
+                    ColorPicker(
+                        "",
+                        selection: Binding(
+                            get: { Color(hex: model.promptBackgroundColorHex, fallback: .black) },
+                            set: { model.promptBackgroundColorHex = $0.hexString(fallback: "#000000") }
+                        ),
+                        supportsOpacity: false
+                    )
+                    .labelsHidden()
+                }
+
+                HStack(spacing: 12) {
+                    Text("Text color")
+                        .frame(width: rowLabelWidth, alignment: .leading)
+                    ColorPicker(
+                        "",
+                        selection: Binding(
+                            get: { Color(hex: model.promptTextColorHex, fallback: .white) },
+                            set: { model.promptTextColorHex = $0.hexString(fallback: "#FFFFFF") }
+                        ),
+                        supportsOpacity: false
+                    )
+                    .labelsHidden()
+                }
             }
         }
     }

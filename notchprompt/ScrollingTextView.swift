@@ -28,6 +28,8 @@ struct ScrollingTextView: View {
     let transcriptKeepMatchedWords: Int
     let fadeFraction: CGFloat
     let backgroundOpacity: Double
+    let backgroundColor: Color
+    let textColor: Color
     let isHovering: Bool
     let scrollMode: PrompterModel.ScrollMode
     let savedScrollPhaseForResume: CGFloat?
@@ -265,7 +267,7 @@ struct ScrollingTextView: View {
     private func scrollingContent(highlightTranscript: Bool) -> some View {
         Text(attributedPromptText(highlightTranscript: highlightTranscript))
             .font(.system(size: fontSize, weight: .regular, design: .monospaced))
-            .foregroundStyle(.white)
+            .foregroundStyle(textColor)
             .frame(maxWidth: .infinity, alignment: .leading)
             .fixedSize(horizontal: false, vertical: true)
     }
@@ -304,7 +306,7 @@ struct ScrollingTextView: View {
                 Spacer(minLength: 0)
 
                 LinearGradient(
-                    colors: [Color.black.opacity(0), Color.black.opacity(backgroundOpacity * 0.9)],
+                    colors: [backgroundColor.opacity(0), backgroundColor.opacity(backgroundOpacity * 0.9)],
                     startPoint: .top,
                     endPoint: .bottom
                 )

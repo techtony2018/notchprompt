@@ -144,6 +144,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             model.$overlayWidth.map { _ in () }.eraseToAnyPublisher(),
             model.$overlayHeight.map { _ in () }.eraseToAnyPublisher(),
             model.$backgroundOpacity.map { _ in () }.eraseToAnyPublisher(),
+            model.$promptBackgroundColorHex.map { _ in () }.eraseToAnyPublisher(),
+            model.$promptTextColorHex.map { _ in () }.eraseToAnyPublisher(),
             model.$scrollingPaceLines.map { _ in () }.eraseToAnyPublisher(),
             model.$countdownSeconds.map { _ in () }.eraseToAnyPublisher(),
             model.$countdownBehavior.map { _ in () }.eraseToAnyPublisher(),

@@ -87,6 +87,8 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
     @Published var overlayWidth: Double = 600
     @Published var overlayHeight: Double = 150
     @Published var backgroundOpacity: Double = 0.58
+    @Published var promptBackgroundColorHex: String = "#000000"
+    @Published var promptTextColorHex: String = "#FFFFFF"
     @Published var scrollingPaceLines: Double = 2
     @Published var scrollMode: ScrollMode = .infinite
     @Published var showTimer: Bool = true
@@ -120,6 +122,7 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
     private var transcriptVisibleUTF16Range: Range<Int> = 0..<Int.max
     private var previousRecognizedTranscript = ""
     private var presentationTimerStartedAt: Date?
+    private var isPresentationTimerActive = false
 
     static let secondsPerLineRange: ClosedRange<Double> = 1...20
     static let secondsPerLineStep: Double = 1
@@ -153,6 +156,8 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
         static let overlayWidth = "overlayWidth"
         static let overlayHeight = "overlayHeight"
         static let backgroundOpacity = "backgroundOpacity"
+        static let promptBackgroundColorHex = "promptBackgroundColorHex"
+        static let promptTextColorHex = "promptTextColorHex"
         static let translucentBackgroundDefaultMigration = "translucentBackgroundDefaultMigration"
         static let scrollingPaceLines = "scrollingPaceLines"
         static let lineBasedPaceMigration = "lineBasedPaceMigration"
@@ -226,6 +231,16 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
         return Locale.current.localizedString(forIdentifier: identifier) ?? identifier
     }
 
+    static func normalizedHexColor(_ value: String?, fallback: String) -> String {
+        let trimmed = (value ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let raw = trimmed.hasPrefix("#") ? String(trimmed.dropFirst()) : trimmed
+        guard raw.count == 6,
+              UInt32(raw, radix: 16) != nil else {
+            return fallback
+        }
+        return "#\(raw.uppercased())"
+    }
+
     func refreshDetectedTranscriptLanguage() {
         detectedTranscriptLanguageIdentifier = LocalMicrophoneVoiceMonitor.bestSpeechLocaleIdentifier(for: script)
     }
@@ -283,6 +298,7 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
         if resetTimer {
             presentationElapsedSeconds = 0
             presentationTimerStartedAt = nil
+            isPresentationTimerActive = false
         }
         resetToken = UUID()
     }
@@ -297,6 +313,7 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
         didReachEndInStopMode = false
         presentationElapsedSeconds = 0
         presentationTimerStartedAt = nil
+        isPresentationTimerActive = false
         hasStartedSession = false
         shouldUseCountdownOnNextStart = true
         savedScrollPhaseForResume = nil
@@ -410,7 +427,7 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
     }
 
     func tickPresentationTimer(now: Date = Date()) {
-        guard isRunning else {
+        guard isPresentationTimerActive, !didReachEndInStopMode else {
             presentationTimerStartedAt = nil
             return
         }
@@ -447,6 +464,7 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
             return
         }
 
+        startPresentationTimerIfNeeded()
         isManuallyPaused = false
         isPausedByVoiceMonitor = false
         manualScrollEnabled = false
@@ -482,6 +500,8 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
     func markReachedEndInStopMode() {
         guard scrollMode == .stopAtEnd else { return }
         didReachEndInStopMode = true
+        isPresentationTimerActive = false
+        presentationTimerStartedAt = nil
         stop()
     }
 
@@ -974,6 +994,8 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
         } else {
             backgroundOpacity = clamp(savedBackgroundOpacity ?? backgroundOpacity, lower: 0.08, upper: 0.92)
         }
+        promptBackgroundColorHex = Self.normalizedHexColor(defaults.string(forKey: DefaultsKey.promptBackgroundColorHex), fallback: "#000000")
+        promptTextColorHex = Self.normalizedHexColor(defaults.string(forKey: DefaultsKey.promptTextColorHex), fallback: "#FFFFFF")
         if defaults.object(forKey: DefaultsKey.lineBasedPaceMigration) == nil {
             scrollingPaceLines = 2
             defaults.set(true, forKey: DefaultsKey.lineBasedPaceMigration)
@@ -1028,6 +1050,8 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
         defaults.set(overlayWidth, forKey: DefaultsKey.overlayWidth)
         defaults.set(overlayHeight, forKey: DefaultsKey.overlayHeight)
         defaults.set(backgroundOpacity, forKey: DefaultsKey.backgroundOpacity)
+        defaults.set(Self.normalizedHexColor(promptBackgroundColorHex, fallback: "#000000"), forKey: DefaultsKey.promptBackgroundColorHex)
+        defaults.set(Self.normalizedHexColor(promptTextColorHex, fallback: "#FFFFFF"), forKey: DefaultsKey.promptTextColorHex)
         defaults.set(scrollingPaceLines, forKey: DefaultsKey.scrollingPaceLines)
         defaults.set(countdownSeconds, forKey: DefaultsKey.countdownSeconds)
         defaults.set(countdownBehavior.rawValue, forKey: DefaultsKey.countdownBehavior)
@@ -1110,6 +1134,12 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
         isWaitingForMicStart = false
         isManuallyPaused = false
         isRunning = true
+    }
+
+    private func startPresentationTimerIfNeeded() {
+        guard !isPresentationTimerActive else { return }
+        isPresentationTimerActive = true
+        presentationTimerStartedAt = nil
     }
 
     private func toggleFromMouseInteraction() {

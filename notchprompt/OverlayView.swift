@@ -8,9 +8,37 @@
 import AppKit
 import SwiftUI
 
-private extension Color {
+extension Color {
     /// `#000000` (darkest black for seamless notch blending)
     static let notchBlack = Color(.sRGB, red: 0, green: 0, blue: 0, opacity: 1.0)
+
+    init(hex: String, fallback: Color) {
+        let trimmed = hex.trimmingCharacters(in: .whitespacesAndNewlines)
+        let raw = trimmed.hasPrefix("#") ? String(trimmed.dropFirst()) : trimmed
+        guard raw.count == 6,
+              let value = UInt32(raw, radix: 16) else {
+            self = fallback
+            return
+        }
+        self = Color(
+            .sRGB,
+            red: Double((value >> 16) & 0xFF) / 255.0,
+            green: Double((value >> 8) & 0xFF) / 255.0,
+            blue: Double(value & 0xFF) / 255.0,
+            opacity: 1
+        )
+    }
+
+    func hexString(fallback: String) -> String {
+        let nsColor = NSColor(self)
+        guard let rgb = nsColor.usingColorSpace(.sRGB) else {
+            return fallback
+        }
+        let red = Int(round(max(0, min(1, rgb.redComponent)) * 255))
+        let green = Int(round(max(0, min(1, rgb.greenComponent)) * 255))
+        let blue = Int(round(max(0, min(1, rgb.blueComponent)) * 255))
+        return String(format: "#%02X%02X%02X", red, green, blue)
+    }
 }
 
 /// MacBook-style notch contour:
@@ -98,6 +126,8 @@ struct OverlayView: View {
         // current overlay dimensions.
         let shape = AppleNotchShape()
         let hideTopStrokeHeight: CGFloat = 2
+        let promptBackgroundColor = Color(hex: model.promptBackgroundColorHex, fallback: .black)
+        let promptTextColor = Color(hex: model.promptTextColorHex, fallback: .white)
 
         ZStack {
             VisualEffectView(material: .hudWindow, blendingMode: .withinWindow)
@@ -105,7 +135,7 @@ struct OverlayView: View {
                 .opacity(0.68)
 
             shape
-                .fill(Color.black.opacity(max(model.backgroundOpacity * 0.78, 0.26)))
+                .fill(promptBackgroundColor.opacity(max(model.backgroundOpacity * 0.78, 0.26)))
 
             shape
                 .fill(
@@ -180,6 +210,8 @@ struct OverlayView: View {
                 transcriptKeepMatchedWords: model.transcriptKeepMatchedWords,
                 fadeFraction: CGFloat(model.edgeFadeFraction),
                 backgroundOpacity: model.backgroundOpacity,
+                backgroundColor: promptBackgroundColor,
+                textColor: promptTextColor,
                 isHovering: false,
                 scrollMode: model.scrollMode,
                 savedScrollPhaseForResume: model.savedScrollPhaseForResume,
@@ -393,7 +425,7 @@ struct OverlayView: View {
         if redSeconds - model.presentationElapsedSeconds <= yellowRemainingSeconds {
             return .yellow
         }
-        return .green
+        return .blue
     }
 
     private var timerTextOpacity: Double {

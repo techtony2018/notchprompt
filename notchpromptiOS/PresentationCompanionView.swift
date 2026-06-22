@@ -95,6 +95,8 @@ struct PresentationCompanionView: View {
     @State private var isRunning = false
     @AppStorage("ios.secondsPerLine") private var secondsPerLine: Double = 5
     @AppStorage("ios.fontSize") private var fontSize: Double = 30
+    @AppStorage("ios.promptBackgroundColorHex") private var promptBackgroundColorHex = "#000000"
+    @AppStorage("ios.promptTextColorHex") private var promptTextColorHex = "#FFFFFF"
     @AppStorage("ios.paceLines") private var paceLines: Double = 2
     @State private var scrollOffset: CGFloat = 0
     @State private var dragStartScrollOffset: CGFloat?
@@ -326,15 +328,16 @@ struct PresentationCompanionView: View {
     }
 
     private var liquidPromptBackground: some View {
-        ZStack {
-            Color.black
+        let promptBackgroundColor = Color(hex: promptBackgroundColorHex, fallback: .black)
+        return ZStack {
+            promptBackgroundColor
 
             LinearGradient(
                 colors: [
                     .white.opacity(0.08),
-                    .black.opacity(0.88),
+                    promptBackgroundColor.opacity(0.88),
                     .blue.opacity(0.06),
-                    .black.opacity(0.96)
+                    promptBackgroundColor.opacity(0.96)
                 ],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
@@ -411,7 +414,7 @@ struct PresentationCompanionView: View {
         if redSeconds - presentationElapsedSeconds <= yellowRemainingSeconds {
             return .yellow
         }
-        return .green
+        return .blue
     }
 
     private var timerTextOpacity: Double {
@@ -479,7 +482,7 @@ struct PresentationCompanionView: View {
 
                 Text(attributedPromptText)
                     .font(.system(size: fontSize, weight: .regular, design: .rounded))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Color(hex: promptTextColorHex, fallback: .white))
                     .lineSpacing(fontSize * 0.35)
                     .opacity(isManuallyPaused ? 0.28 : 1)
                     .padding(.horizontal, 24)
@@ -1087,6 +1090,22 @@ struct PresentationCompanionView: View {
                         sliderRow("Tool bar opacity", value: $promptToolbarOpacity, range: 0.25...1, step: 0.05) { value in
                             "\(Int((value * 100).rounded()))%"
                         }
+                        ColorPicker(
+                            "Background color",
+                            selection: Binding(
+                                get: { Color(hex: promptBackgroundColorHex, fallback: .black) },
+                                set: { promptBackgroundColorHex = $0.hexString(fallback: "#000000") }
+                            ),
+                            supportsOpacity: false
+                        )
+                        ColorPicker(
+                            "Text color",
+                            selection: Binding(
+                                get: { Color(hex: promptTextColorHex, fallback: .white) },
+                                set: { promptTextColorHex = $0.hexString(fallback: "#FFFFFF") }
+                            ),
+                            supportsOpacity: false
+                        )
                     }
 
                     Color.clear
@@ -2238,6 +2257,42 @@ private extension View {
                     )
             )
             .shadow(color: .black.opacity(0.32), radius: 12, x: 0, y: 5)
+    }
+}
+
+private extension Color {
+    init(hex: String, fallback: Color) {
+        let trimmed = hex.trimmingCharacters(in: .whitespacesAndNewlines)
+        let raw = trimmed.hasPrefix("#") ? String(trimmed.dropFirst()) : trimmed
+        guard raw.count == 6,
+              let value = UInt32(raw, radix: 16) else {
+            self = fallback
+            return
+        }
+        self = Color(
+            .sRGB,
+            red: Double((value >> 16) & 0xFF) / 255.0,
+            green: Double((value >> 8) & 0xFF) / 255.0,
+            blue: Double(value & 0xFF) / 255.0,
+            opacity: 1
+        )
+    }
+
+    func hexString(fallback: String) -> String {
+        let uiColor = UIColor(self)
+        var red: CGFloat = 0
+        var green: CGFloat = 0
+        var blue: CGFloat = 0
+        var alpha: CGFloat = 0
+        guard uiColor.getRed(&red, green: &green, blue: &blue, alpha: &alpha) else {
+            return fallback
+        }
+        return String(
+            format: "#%02X%02X%02X",
+            Int(round(max(0, min(1, red)) * 255)),
+            Int(round(max(0, min(1, green)) * 255)),
+            Int(round(max(0, min(1, blue)) * 255))
+        )
     }
 }
 
