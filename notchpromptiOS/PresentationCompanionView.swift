@@ -116,6 +116,7 @@ struct PresentationCompanionView: View {
     @AppStorage("ios.transcriptMatchConsecutiveWords") private var transcriptMatchConsecutiveWords = 3
     @AppStorage("ios.transcriptMaxForwardLookingWords") private var transcriptMaxForwardLookingWords = 20
     @AppStorage("ios.transcriptScrollUponRemainingLines") private var transcriptScrollUponRemainingLines = 2
+    @AppStorage("ios.transcriptKeepMatchedWords") private var transcriptKeepMatchedWords = 10
     @AppStorage("ios.fuzzyTranscriptMatching") private var fuzzyTranscriptMatching = true
     @State private var detectedTranscriptLanguageIdentifier = "en-US"
     @AppStorage("ios.voiceDetectionThresholdDb") private var voiceDetectionThresholdDb = -30.0
@@ -968,9 +969,16 @@ struct PresentationCompanionView: View {
                             .padding(.leading, 18)
 
                             Stepper(
-                                "Scroll upon remaining lines: \(transcriptScrollUponRemainingLines)",
+                                "Scroll at remaining lines: \(transcriptScrollUponRemainingLines)",
                                 value: $transcriptScrollUponRemainingLines,
                                 in: 1...10
+                            )
+                            .padding(.leading, 18)
+
+                            Stepper(
+                                "Keep matched words: \(transcriptKeepMatchedWords)",
+                                value: $transcriptKeepMatchedWords,
+                                in: 0...30
                             )
                             .padding(.leading, 18)
 
@@ -1642,7 +1650,7 @@ struct PresentationCompanionView: View {
         let remainingLines = CGFloat(max(transcriptScrollUponRemainingLines, 1))
         let threshold = scrollOffset + max(promptViewportHeight - (remainingLines * promptLineHeight), 0)
         guard spokenBottom >= threshold else { return }
-        let contextOffset = transcriptContextUTF16Offset(keepingWords: 10, before: spokenCharacterEnd)
+        let contextOffset = transcriptContextUTF16Offset(keepingWords: transcriptKeepMatchedWords, before: spokenCharacterEnd)
         let targetOffset = renderedPromptHeight(upToUTF16Offset: contextOffset)
         guard targetOffset > scrollOffset + 2 else { return }
         scrollOffset = min(max(targetOffset, 0), maxOffset)

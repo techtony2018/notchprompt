@@ -136,6 +136,7 @@ struct OverlayView: View {
                 transcriptProgressAllowsBackward: model.transcriptBasedPrompt,
                 transcriptDrivenScrolling: model.transcriptBasedPrompt,
                 transcriptScrollUponRemainingLines: model.transcriptScrollUponRemainingLines,
+                transcriptKeepMatchedWords: model.transcriptKeepMatchedWords,
                 fadeFraction: CGFloat(model.edgeFadeFraction),
                 backgroundOpacity: model.backgroundOpacity,
                 isHovering: false,

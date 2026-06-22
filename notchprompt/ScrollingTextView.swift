@@ -25,6 +25,7 @@ struct ScrollingTextView: View {
     let transcriptProgressAllowsBackward: Bool
     let transcriptDrivenScrolling: Bool
     let transcriptScrollUponRemainingLines: Int
+    let transcriptKeepMatchedWords: Int
     let fadeFraction: CGFloat
     let backgroundOpacity: Double
     let isHovering: Bool
@@ -375,7 +376,7 @@ struct ScrollingTextView: View {
         let remainingLines = CGFloat(max(transcriptScrollUponRemainingLines, 1))
         let threshold = phase + max(viewportHeight - (remainingLines * lineHeight), 0)
         guard spokenBottom >= threshold else { return }
-        let contextOffset = utf16OffsetBeforeMatchedContext(keepingWords: 10)
+        let contextOffset = utf16OffsetBeforeMatchedContext(keepingWords: transcriptKeepMatchedWords)
         let target = renderedHeight(upToUTF16Offset: contextOffset)
         guard transcriptProgressAllowsBackward || target > phase else { return }
         hasReachedEndInStopMode = false

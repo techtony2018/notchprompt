@@ -60,6 +60,7 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
     @Published var transcriptMatchConsecutiveWords: Int = 3
     @Published var transcriptMaxForwardLookingWords: Int = 20
     @Published var transcriptScrollUponRemainingLines: Int = 2
+    @Published var transcriptKeepMatchedWords: Int = 10
     @Published var fuzzyTranscriptMatching: Bool = true
     @Published var voiceDetectionThresholdDb: Double = -30
     @Published private(set) var voiceInputLevelDb: Double = -160
@@ -124,6 +125,7 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
     static let secondsPerLineStep: Double = 1
     static let scrollingPaceLinesRange: ClosedRange<Double> = 1...10
     static let transcriptScrollUponRemainingLinesRange: ClosedRange<Int> = 1...10
+    static let transcriptKeepMatchedWordsRange: ClosedRange<Int> = 0...30
     static let overlayHeightRange: ClosedRange<Double> = 120...720
     static let timeWarningMinutesRange: ClosedRange<Double> = 1...100
 
@@ -142,6 +144,7 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
         static let transcriptMatchConsecutiveWords = "transcriptMatchConsecutiveWords"
         static let transcriptMaxForwardLookingWords = "transcriptMaxForwardLookingWords"
         static let transcriptScrollUponRemainingLines = "transcriptScrollUponRemainingLines"
+        static let transcriptKeepMatchedWords = "transcriptKeepMatchedWords"
         static let fuzzyTranscriptMatching = "fuzzyTranscriptMatching"
         static let voiceDetectionThresholdDb = "voiceDetectionThresholdDb"
         static let secondsPerLine = "secondsPerLine"
@@ -928,6 +931,11 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
             lower: Double(Self.transcriptScrollUponRemainingLinesRange.lowerBound),
             upper: Double(Self.transcriptScrollUponRemainingLinesRange.upperBound)
         ))
+        transcriptKeepMatchedWords = Int(clamp(
+            Double(defaults.object(forKey: DefaultsKey.transcriptKeepMatchedWords) as? Int ?? transcriptKeepMatchedWords),
+            lower: Double(Self.transcriptKeepMatchedWordsRange.lowerBound),
+            upper: Double(Self.transcriptKeepMatchedWordsRange.upperBound)
+        ))
         fuzzyTranscriptMatching = defaults.object(forKey: DefaultsKey.fuzzyTranscriptMatching) as? Bool ?? fuzzyTranscriptMatching
         if transcriptBasedPrompt {
             autoPauseResumeWithLocalMic = false
@@ -1009,6 +1017,7 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
         defaults.set(transcriptMatchConsecutiveWords, forKey: DefaultsKey.transcriptMatchConsecutiveWords)
         defaults.set(transcriptMaxForwardLookingWords, forKey: DefaultsKey.transcriptMaxForwardLookingWords)
         defaults.set(transcriptScrollUponRemainingLines, forKey: DefaultsKey.transcriptScrollUponRemainingLines)
+        defaults.set(transcriptKeepMatchedWords, forKey: DefaultsKey.transcriptKeepMatchedWords)
         defaults.set(fuzzyTranscriptMatching, forKey: DefaultsKey.fuzzyTranscriptMatching)
         defaults.set(voiceDetectionThresholdDb, forKey: DefaultsKey.voiceDetectionThresholdDb)
         defaults.set(secondsPerLine, forKey: DefaultsKey.secondsPerLine)

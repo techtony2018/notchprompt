@@ -36,7 +36,6 @@ struct ContentView: View {
     @State private var scriptEditorResizeStartHeight: Double?
 
     private let rowLabelWidth: CGFloat = 164
-    private let speechScrollLabelWidth: CGFloat = 220
     private let valueWidth: CGFloat = 64
 
     private var promptMode: PromptMode {
@@ -98,6 +97,12 @@ struct ContentView: View {
             model.transcriptScrollUponRemainingLines = min(
                 max(value, PrompterModel.transcriptScrollUponRemainingLinesRange.lowerBound),
                 PrompterModel.transcriptScrollUponRemainingLinesRange.upperBound
+            )
+        }
+        .onChange(of: model.transcriptKeepMatchedWords) { _, value in
+            model.transcriptKeepMatchedWords = min(
+                max(value, PrompterModel.transcriptKeepMatchedWordsRange.lowerBound),
+                PrompterModel.transcriptKeepMatchedWordsRange.upperBound
             )
         }
         .onChange(of: model.fuzzyTranscriptMatching) { _, _ in
@@ -334,13 +339,24 @@ struct ContentView: View {
                         .padding(.leading, 18)
 
                         HStack {
-                            Text("Scroll upon remaining lines:")
-                                .lineLimit(1)
-                                .frame(width: speechScrollLabelWidth, alignment: .leading)
+                            Text("Scroll at remaining lines")
+                                .frame(width: rowLabelWidth, alignment: .leading)
                             Stepper(
                                 "\(model.transcriptScrollUponRemainingLines)",
                                 value: $model.transcriptScrollUponRemainingLines,
                                 in: PrompterModel.transcriptScrollUponRemainingLinesRange
+                            )
+                            .frame(width: 96, alignment: .leading)
+                        }
+                        .padding(.leading, 18)
+
+                        HStack {
+                            Text("Keep matched words")
+                                .frame(width: rowLabelWidth, alignment: .leading)
+                            Stepper(
+                                "\(model.transcriptKeepMatchedWords)",
+                                value: $model.transcriptKeepMatchedWords,
+                                in: PrompterModel.transcriptKeepMatchedWordsRange
                             )
                             .frame(width: 96, alignment: .leading)
                         }
