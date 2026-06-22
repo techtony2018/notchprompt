@@ -28,6 +28,10 @@ final class IOSLocalMicrophoneVoiceMonitor: ObservableObject {
     private var lastVoiceDate = Date.distantPast
     private var lastPeakDate = Date.distantPast
     private var lastMeterDate = Date.distantPast
+    private var lastAudioBufferDate = Date.distantPast
+    private var audioStreamSeconds: TimeInterval = 0
+    private var recognitionStartAudioSeconds: TimeInterval = 0
+    private var lastRecognitionRestartDate = Date.distantPast
     private var recentPeakDates: [Date] = []
     private var wasAbovePeakThreshold = false
 
@@ -107,6 +111,10 @@ final class IOSLocalMicrophoneVoiceMonitor: ObservableObject {
         lastVoiceDate = .distantPast
         lastPeakDate = .distantPast
         lastMeterDate = .distantPast
+        lastAudioBufferDate = .distantPast
+        audioStreamSeconds = 0
+        recognitionStartAudioSeconds = 0
+        lastRecognitionRestartDate = .distantPast
         recentPeakDates.removeAll()
         wasAbovePeakThreshold = false
     }
@@ -119,6 +127,8 @@ final class IOSLocalMicrophoneVoiceMonitor: ObservableObject {
         recentPeakDates.removeAll()
         lastPeakDate = .distantPast
         wasAbovePeakThreshold = false
+        recognitionStartAudioSeconds = audioStreamSeconds
+        lastRecognitionRestartDate = Date()
 
         guard isMonitoring, transcriptTrackingEnabled else { return }
         configureRecognitionIfNeeded()
@@ -145,8 +155,11 @@ final class IOSLocalMicrophoneVoiceMonitor: ObservableObject {
         }
 
         input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
-            self?.recognitionRequest?.append(buffer)
-            self?.process(buffer)
+            guard let self else { return }
+            self.lastAudioBufferDate = Date()
+            self.audioStreamSeconds += TimeInterval(buffer.frameLength) / max(buffer.format.sampleRate, 1)
+            self.recognitionRequest?.append(buffer)
+            self.process(buffer)
         }
 
         do {
@@ -199,13 +212,50 @@ final class IOSLocalMicrophoneVoiceMonitor: ObservableObject {
 
         let request = SFSpeechAudioBufferRecognitionRequest()
         request.shouldReportPartialResults = true
+        request.taskHint = .dictation
+        request.addsPunctuation = false
+        request.requiresOnDeviceRecognition = recognizer.supportsOnDeviceRecognition
         recognitionRequest = request
         shouldRestartRecognition = false
+        recognitionStartAudioSeconds = audioStreamSeconds
         recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
             guard let self else { return }
             if let result {
                 let transcript = result.bestTranscription.formattedString
                 let wordsPerMinute = self.wordsPerMinute(from: result.bestTranscription.segments)
+                let segmentEndAudioSeconds = self.segmentEndAudioSeconds(for: result)
+                let recognizerBacklogSeconds = self.audioStreamSeconds - segmentEndAudioSeconds
+                #if DEBUG
+                let audioLag = Date().timeIntervalSince(self.lastAudioBufferDate)
+                NSLog(
+                    "PCompanionPerf speech partial=%@ final=%@ onDevice=%@ callbackLag=%.2fs recognizerBacklog=%.2fs stream=%.2fs segmentEnd=%.2fs locale=%@ segments=%d chars=%d",
+                    String(!result.isFinal),
+                    String(result.isFinal),
+                    String(request.requiresOnDeviceRecognition),
+                    audioLag,
+                    recognizerBacklogSeconds,
+                    self.audioStreamSeconds,
+                    segmentEndAudioSeconds,
+                    self.recognitionLocaleIdentifier,
+                    result.bestTranscription.segments.count,
+                    transcript.count
+                )
+                #endif
+                if self.shouldRestartRecognitionForBacklog(recognizerBacklogSeconds) {
+                    #if DEBUG
+                    NSLog(
+                        "PCompanionPerf speech restartForBacklog %.2fs stream=%.2fs segmentEnd=%.2fs locale=%@",
+                        recognizerBacklogSeconds,
+                        self.audioStreamSeconds,
+                        segmentEndAudioSeconds,
+                        self.recognitionLocaleIdentifier
+                    )
+                    #endif
+                    self.shouldRestartRecognition = self.isMonitoring && self.transcriptTrackingEnabled
+                    self.stopRecognition()
+                    self.restartRecognitionIfNeeded(delay: 0.05)
+                    return
+                }
                 Task { @MainActor in
                     self.recognizedTranscript = transcript
                     if let wordsPerMinute {
@@ -217,9 +267,21 @@ final class IOSLocalMicrophoneVoiceMonitor: ObservableObject {
             if error != nil || result?.isFinal == true {
                 self.shouldRestartRecognition = self.isMonitoring && self.transcriptTrackingEnabled
                 self.stopRecognition()
-                self.restartRecognitionIfNeeded()
+                self.restartRecognitionIfNeeded(delay: 0.2)
             }
         }
+    }
+
+    private func segmentEndAudioSeconds(for result: SFSpeechRecognitionResult) -> TimeInterval {
+        guard let lastSegment = result.bestTranscription.segments.last else {
+            return recognitionStartAudioSeconds
+        }
+        return recognitionStartAudioSeconds + lastSegment.timestamp + lastSegment.duration
+    }
+
+    private func shouldRestartRecognitionForBacklog(_ backlogSeconds: TimeInterval) -> Bool {
+        guard transcriptTrackingEnabled, backlogSeconds > 3.0 else { return false }
+        return Date().timeIntervalSince(lastRecognitionRestartDate) > 2.0
     }
 
     private func stopRecognition() {
@@ -229,10 +291,11 @@ final class IOSLocalMicrophoneVoiceMonitor: ObservableObject {
         recognitionTask = nil
     }
 
-    private func restartRecognitionIfNeeded() {
+    private func restartRecognitionIfNeeded(delay: TimeInterval) {
         guard shouldRestartRecognition else { return }
         shouldRestartRecognition = false
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+        lastRecognitionRestartDate = Date()
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
             guard let self,
                   self.isMonitoring,
                   self.transcriptTrackingEnabled,

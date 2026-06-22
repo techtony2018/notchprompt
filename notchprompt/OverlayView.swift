@@ -90,6 +90,7 @@ struct OverlayView: View {
     @ObservedObject var model: PrompterModel
     @State private var tooltipText: String?
     @State private var resizeStartSize: CGSize?
+    @State private var timerDragStartOffset: CGSize?
 
     var body: some View {
         // Ratio-driven contour tuned to Apple notch geometry and scaled to the
@@ -170,6 +171,10 @@ struct OverlayView: View {
 
             if shouldShowBottomStatusLine {
                 bottomStatusLine
+            }
+
+            if shouldShowTimerIndicator {
+                timerIndicator
             }
 
             if model.isManuallyPaused {
@@ -294,7 +299,89 @@ struct OverlayView: View {
     }
 
     private var shouldShowBottomStatusLine: Bool {
-        model.autoPauseResumeWithLocalMic || model.transcriptBasedPrompt || !model.recognizedTranscriptDisplayLine.isEmpty
+        true
+    }
+
+    private var shouldShowTimerIndicator: Bool {
+        model.showTimer && model.hasStartedSession
+    }
+
+    private var timerIndicator: some View {
+        Text(timerText)
+            .font(.system(size: 12, weight: .semibold, design: .rounded))
+            .monospacedDigit()
+            .foregroundStyle(timerColor)
+            .opacity(timerTextOpacity)
+            .padding(.horizontal, 9)
+            .padding(.vertical, 5)
+            .shadow(color: .black.opacity(0.65), radius: 3, x: 0, y: 1)
+            .contentShape(Rectangle())
+            .offset(x: model.timerOverlayOffsetX, y: model.timerOverlayOffsetY)
+            .gesture(timerDragGesture)
+            .padding(.trailing, 14)
+            .padding(.top, 46)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+    }
+
+    private var timerDragGesture: some Gesture {
+        DragGesture()
+            .onChanged { value in
+                let startOffset = timerDragStartOffset ?? CGSize(
+                    width: model.timerOverlayOffsetX,
+                    height: model.timerOverlayOffsetY
+                )
+                timerDragStartOffset = startOffset
+                model.timerOverlayOffsetX = Double(startOffset.width + value.translation.width)
+                model.timerOverlayOffsetY = Double(startOffset.height + value.translation.height)
+            }
+            .onEnded { _ in
+                timerDragStartOffset = nil
+            }
+    }
+
+    private var timerText: String {
+        let elapsed = formattedTimerDuration(model.presentationElapsedSeconds)
+        guard model.timeWarningEnabled else { return elapsed }
+        return "\(elapsed) / \(formattedTimerDuration(model.timeWarningRedThresholdMinutes * 60))"
+    }
+
+    private var timerColor: Color {
+        guard model.timeWarningEnabled else {
+            return .white.opacity(0.86)
+        }
+        let redSeconds = max(model.timeWarningRedThresholdMinutes * 60, 1)
+        let yellowRemainingSeconds = max(model.timeWarningYellowThresholdMinutes * 60, 1)
+        if model.presentationElapsedSeconds >= redSeconds {
+            return .red
+        }
+        if redSeconds - model.presentationElapsedSeconds <= yellowRemainingSeconds {
+            return .yellow
+        }
+        return .green
+    }
+
+    private var timerTextOpacity: Double {
+        guard isTimerInYellowWarningWindow else { return 1 }
+        return Int((model.presentationElapsedSeconds * 10).rounded(.down)).isMultiple(of: 2) ? 1 : 0.28
+    }
+
+    private var isTimerInYellowWarningWindow: Bool {
+        guard model.timeWarningEnabled else { return false }
+        let redSeconds = max(model.timeWarningRedThresholdMinutes * 60, 1)
+        let yellowRemainingSeconds = max(model.timeWarningYellowThresholdMinutes * 60, 1)
+        return model.presentationElapsedSeconds < redSeconds &&
+            redSeconds - model.presentationElapsedSeconds <= yellowRemainingSeconds
+    }
+
+    private func formattedTimerDuration(_ duration: TimeInterval) -> String {
+        let totalSeconds = max(0, Int(duration.rounded()))
+        let hours = totalSeconds / 3600
+        let minutes = (totalSeconds % 3600) / 60
+        let seconds = totalSeconds % 60
+        if hours > 0 {
+            return String(format: "%d:%02d:%02d", hours, minutes, seconds)
+        }
+        return String(format: "%d:%02d", minutes, seconds)
     }
 
     private var bottomStatusLine: some View {
@@ -302,7 +389,7 @@ struct OverlayView: View {
             Spacer()
             HStack(spacing: 10) {
                 statusLeadingLabel
-                    .frame(width: model.autoPauseResumeWithLocalMic ? 82 : 108, alignment: .leading)
+                    .frame(width: statusLeadingLabelWidth, alignment: .leading)
 
                 unifiedStatusArea
             }
@@ -346,7 +433,7 @@ struct OverlayView: View {
         } else if model.transcriptBasedPrompt {
             unifiedStatusText(model.recognizedTranscriptDisplayLine, color: .blue, weight: .medium)
         } else {
-            Spacer(minLength: 0)
+            unifiedStatusText("\(Int(model.secondsPerLine.rounded()))s/line", color: .white.opacity(0.82), weight: .semibold)
         }
     }
 
@@ -393,8 +480,21 @@ struct OverlayView: View {
             }
             .menuStyle(.borderlessButton)
         } else {
-            EmptyView()
+            Text("Speed:")
+                .foregroundStyle(.white.opacity(0.72))
+                .font(.system(size: 10, weight: .semibold))
+                .lineLimit(1)
         }
+    }
+
+    private var statusLeadingLabelWidth: CGFloat {
+        if model.autoPauseResumeWithLocalMic {
+            return 82
+        }
+        if model.transcriptBasedPrompt {
+            return 108
+        }
+        return 58
     }
 
     private var resizeHandle: some View {

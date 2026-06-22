@@ -6,6 +6,11 @@ SOURCE_INFO_PLIST="${SRCROOT}/${INFOPLIST_FILE}"
 STATE_FILE="${SRCROOT}/PCompanion.version"
 PROJECT_FILE="${SRCROOT}/notchprompt.xcodeproj/project.pbxproj"
 
+if [ "${PRESENTATION_COMPANION_SKIP_VERSION_STAMP:-NO}" = "YES" ]; then
+    echo "Skipping ${PRODUCT_NAME} version stamp"
+    exit 0
+fi
+
 increment_patch_version() {
     awk -v version="$1" '
         BEGIN {

@@ -370,7 +370,9 @@ struct ScrollingTextView: View {
 
     private func applyTranscriptProgress() {
         let spokenBottom = renderedHeight(upToUTF16Offset: transcriptSpokenCharacterEnd)
-        let target = spokenBottom - (viewportHeight * 0.42)
+        let bottomThirdThreshold = phase + (viewportHeight * (2.0 / 3.0))
+        guard spokenBottom >= bottomThirdThreshold else { return }
+        let target = spokenBottom - max(fontSize * 1.35, 1)
         guard transcriptProgressAllowsBackward || target > phase else { return }
         hasReachedEndInStopMode = false
         deferredStopTargetPhase = nil

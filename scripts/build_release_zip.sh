@@ -5,10 +5,10 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 VERSION="${1:-v1.0.0}"
 DERIVED_DATA_PATH="$ROOT_DIR/build/release"
 OUTPUT_DIR="$ROOT_DIR/dist"
-APP_PATH="$DERIVED_DATA_PATH/Build/Products/Release/notchprompt.app"
+APP_PATH="$DERIVED_DATA_PATH/Build/Products/Release/Presentation Companion.app"
 STAGING_DIR="$ROOT_DIR/build/dmg-staging"
 OUTPUT_DMG="$OUTPUT_DIR/notchprompt-${VERSION}-macos.dmg"
-VOLUME_NAME="Notchprompt"
+VOLUME_NAME="Presentation Companion"
 
 echo "==> Building Release app for ${VERSION}"
 xcodebuild \
@@ -16,6 +16,7 @@ xcodebuild \
   -scheme notchprompt \
   -configuration Release \
   -derivedDataPath "$DERIVED_DATA_PATH" \
+  PRESENTATION_COMPANION_SKIP_VERSION_STAMP=YES \
   CODE_SIGNING_ALLOWED=NO \
   CODE_SIGN_IDENTITY="" \
   build

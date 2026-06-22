@@ -9,6 +9,23 @@ import SwiftUI
 import AppKit
 import CoreGraphics
 
+private enum PromptMode: String, CaseIterable {
+    case speed
+    case voice
+    case transcript
+
+    var label: String {
+        switch self {
+        case .speed:
+            return "Time"
+        case .voice:
+            return "Voice"
+        case .transcript:
+            return "Speech"
+        }
+    }
+}
+
 struct ContentView: View {
     @ObservedObject private var model = PrompterModel.shared
     @State private var isLoadLinkSheetPresented = false
@@ -21,12 +38,42 @@ struct ContentView: View {
     private let rowLabelWidth: CGFloat = 164
     private let valueWidth: CGFloat = 64
 
+    private var promptMode: PromptMode {
+        if model.transcriptBasedPrompt {
+            return .transcript
+        }
+        if model.autoPauseResumeWithLocalMic {
+            return .voice
+        }
+        return .speed
+    }
+
+    private var promptModeBinding: Binding<PromptMode> {
+        Binding(
+            get: { promptMode },
+            set: { mode in
+                switch mode {
+                case .speed:
+                    model.setAutoPauseResumeWithLocalMic(false)
+                    model.setTranscriptBasedPrompt(false)
+                case .voice:
+                    model.setAutoPauseResumeWithLocalMic(true)
+                    model.setTranscriptBasedPrompt(false)
+                case .transcript:
+                    model.setAutoPauseResumeWithLocalMic(false)
+                    model.setTranscriptBasedPrompt(true)
+                }
+            }
+        )
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 headerSection
                 scriptSection
                 playbackSection
+                timeWarningSection
                 appearanceSection
                 displaySection
                 privacySection
@@ -45,6 +92,18 @@ struct ContentView: View {
         }
         .onChange(of: model.transcriptMaxForwardLookingWords) { _, _ in
             model.resetTranscriptProgress()
+        }
+        .onChange(of: model.fuzzyTranscriptMatching) { _, _ in
+            model.resetTranscriptProgress()
+        }
+        .onChange(of: model.timeWarningDurationMinutes) { _, _ in
+            model.syncDefaultTimeWarningThresholds()
+        }
+        .onChange(of: model.timeWarningYellowThresholdMinutes) { _, _ in
+            model.normalizeTimeWarningSettings()
+        }
+        .onChange(of: model.timeWarningRedThresholdMinutes) { _, _ in
+            model.normalizeTimeWarningSettings()
         }
         .sheet(isPresented: $isLoadLinkSheetPresented) {
             LoadLinkSheet(
@@ -71,9 +130,8 @@ struct ContentView: View {
                 Text("Configure playback, appearance, and display behavior for the overlay.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
-                Text(appVersionText)
+                Link(appVersionText, destination: URL(string: "https://github.com/techtony2018/notchprompt")!)
                     .font(.footnote.weight(.medium))
-                    .foregroundStyle(.secondary)
             }
 
             Spacer(minLength: 16)
@@ -169,28 +227,13 @@ struct ContentView: View {
     private var playbackSection: some View {
         SettingsSection(title: "Playback") {
             VStack(alignment: .leading, spacing: 12) {
-                sliderRow(
-                    title: "Scroll speed",
-                    valueText: "\(Int(model.secondsPerLine))s/line",
-                    slider: Slider(value: $model.secondsPerLine, in: PrompterModel.secondsPerLineRange, step: PrompterModel.secondsPerLineStep)
+                Toggle(
+                    "Play in loops",
+                    isOn: Binding(
+                        get: { model.scrollMode == .infinite },
+                        set: { model.setScrollMode($0 ? .infinite : .stopAtEnd) }
+                    )
                 )
-
-                HStack(alignment: .firstTextBaseline) {
-                    Text("Scroll mode")
-                        .frame(width: rowLabelWidth, alignment: .leading)
-                    Picker(
-                        "",
-                        selection: Binding(
-                            get: { model.scrollMode },
-                            set: { model.setScrollMode($0) }
-                        )
-                    ) {
-                        Text("Infinite").tag(PrompterModel.ScrollMode.infinite)
-                        Text("Stop at end").tag(PrompterModel.ScrollMode.stopAtEnd)
-                    }
-                    .labelsHidden()
-                    .pickerStyle(.segmented)
-                }
 
                 HStack {
                     Text("Countdown")
@@ -227,63 +270,71 @@ struct ContentView: View {
 
                 Toggle("Click content area to start, pause, or resume", isOn: $model.clickContentTogglesPlayback)
 
-                VStack(alignment: .leading, spacing: 4) {
-                    Toggle(
-                        "Auto pause/resume from voice",
-                        isOn: Binding(
-                            get: { model.autoPauseResumeWithLocalMic },
-                            set: { model.setAutoPauseResumeWithLocalMic($0) }
-                        )
-                    )
-                    sliderRow(
-                        title: "Voice detection threshold",
-                        valueText: "\(Int(model.voiceDetectionThresholdDb.rounded())) dB",
-                        slider: Slider(value: $model.voiceDetectionThresholdDb, in: -70...20, step: 1)
-                    )
-                    .padding(.leading, 18)
-                    .disabled(!model.autoPauseResumeWithLocalMic)
-                    .opacity(model.autoPauseResumeWithLocalMic ? 1 : 0.55)
-
-                    Toggle(
-                        "Transcript based prompt",
-                        isOn: Binding(
-                            get: { model.transcriptBasedPrompt },
-                            set: { model.setTranscriptBasedPrompt($0) }
-                        )
-                    )
-                    HStack {
-                        Text("Match consecutive words")
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(alignment: .firstTextBaseline) {
+                        Text("Scroll mode")
                             .frame(width: rowLabelWidth, alignment: .leading)
-                        Stepper(
-                            "\(model.transcriptMatchConsecutiveWords)",
-                            value: $model.transcriptMatchConsecutiveWords,
-                            in: 1...10
-                        )
-                        .frame(width: 96, alignment: .leading)
+                        Picker("", selection: promptModeBinding) {
+                            ForEach(PromptMode.allCases, id: \.self) { mode in
+                                Text(mode.label).tag(mode)
+                            }
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.segmented)
                     }
-                    .padding(.leading, 18)
-                    .disabled(!model.transcriptBasedPrompt)
-                    .opacity(model.transcriptBasedPrompt ? 1 : 0.55)
 
-                    HStack {
-                        Text("Max forward looking words")
-                            .frame(width: rowLabelWidth, alignment: .leading)
-                        Stepper(
-                            "\(model.transcriptMaxForwardLookingWords)",
-                            value: $model.transcriptMaxForwardLookingWords,
-                            in: 5...100
+                    if promptMode == .speed {
+                        sliderRow(
+                            title: "Scroll speed",
+                            valueText: "\(Int(model.secondsPerLine.rounded()))s/line",
+                            slider: Slider(value: $model.secondsPerLine, in: PrompterModel.secondsPerLineRange, step: PrompterModel.secondsPerLineStep)
                         )
-                        .frame(width: 96, alignment: .leading)
+                        .padding(.leading, 18)
                     }
-                    .padding(.leading, 18)
-                    .disabled(!model.transcriptBasedPrompt)
-                    .opacity(model.transcriptBasedPrompt ? 1 : 0.55)
-                    if let message = model.voiceControlUnavailableMessage {
+
+                    if promptMode == .voice {
+                        sliderRow(
+                            title: "Voice detection threshold",
+                            valueText: "\(Int(model.voiceDetectionThresholdDb.rounded())) dB",
+                            slider: Slider(value: $model.voiceDetectionThresholdDb, in: -70...20, step: 1)
+                        )
+                        .padding(.leading, 18)
+                    }
+
+                    if promptMode == .transcript {
+                        HStack {
+                            Text("Match consecutive words")
+                                .frame(width: rowLabelWidth, alignment: .leading)
+                            Stepper(
+                                "\(model.transcriptMatchConsecutiveWords)",
+                                value: $model.transcriptMatchConsecutiveWords,
+                                in: 1...10
+                            )
+                            .frame(width: 96, alignment: .leading)
+                        }
+                        .padding(.leading, 18)
+
+                        HStack {
+                            Text("Max forward looking words")
+                                .frame(width: rowLabelWidth, alignment: .leading)
+                            Stepper(
+                                "\(model.transcriptMaxForwardLookingWords)",
+                                value: $model.transcriptMaxForwardLookingWords,
+                                in: 5...100
+                            )
+                            .frame(width: 96, alignment: .leading)
+                        }
+                        .padding(.leading, 18)
+
+                        Toggle("Fuzzy transcript matching", isOn: $model.fuzzyTranscriptMatching)
+                            .padding(.leading, 18)
+                    }
+                    if promptMode == .voice, let message = model.voiceControlUnavailableMessage {
                         Text(message)
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
-                    if let message = model.transcriptUnavailableMessage {
+                    if promptMode == .transcript, let message = model.transcriptUnavailableMessage {
                         Text(message)
                             .font(.footnote)
                             .foregroundStyle(.secondary)
@@ -291,6 +342,49 @@ struct ContentView: View {
                 }
             }
         }
+    }
+
+    private var timeWarningSection: some View {
+        SettingsSection(title: "Presentation timing aid") {
+            VStack(alignment: .leading, spacing: 12) {
+                Toggle("Show timer", isOn: $model.showTimer)
+
+                Toggle("Colored time warning", isOn: $model.timeWarningEnabled)
+                    .disabled(!model.showTimer)
+                    .opacity(model.showTimer ? 1 : 0.55)
+
+                sliderRow(
+                    title: "Full duration",
+                    valueText: "\(Int(max(model.timeWarningDurationMinutes.rounded(), 1))) min",
+                    slider: Slider(value: clampedTimeBinding($model.timeWarningDurationMinutes, upper: PrompterModel.timeWarningMinutesRange.upperBound), in: PrompterModel.timeWarningMinutesRange, step: 1)
+                )
+                .disabled(!model.showTimer || !model.timeWarningEnabled)
+                .opacity(model.showTimer && model.timeWarningEnabled ? 1 : 0.55)
+
+                sliderRow(
+                    title: "Blinking yellow at",
+                    valueText: "\(Int(min(max(model.timeWarningYellowThresholdMinutes.rounded(), 1), max(model.timeWarningRedThresholdMinutes.rounded(), 1)))) min",
+                    slider: Slider(value: clampedTimeBinding($model.timeWarningYellowThresholdMinutes, upper: max(model.timeWarningRedThresholdMinutes, 1)), in: PrompterModel.timeWarningMinutesRange, step: 1)
+                )
+                .disabled(!model.showTimer || !model.timeWarningEnabled)
+                .opacity(model.showTimer && model.timeWarningEnabled ? 1 : 0.55)
+
+                sliderRow(
+                    title: "Red at",
+                    valueText: "\(Int(max(model.timeWarningRedThresholdMinutes.rounded(), 1))) min",
+                    slider: Slider(value: clampedTimeBinding($model.timeWarningRedThresholdMinutes, upper: PrompterModel.timeWarningMinutesRange.upperBound), in: PrompterModel.timeWarningMinutesRange, step: 1)
+                )
+                .disabled(!model.showTimer || !model.timeWarningEnabled)
+                .opacity(model.showTimer && model.timeWarningEnabled ? 1 : 0.55)
+            }
+        }
+    }
+
+    private func clampedTimeBinding(_ binding: Binding<Double>, upper: Double) -> Binding<Double> {
+        Binding(
+            get: { min(max(binding.wrappedValue, 1), max(upper, 1)) },
+            set: { binding.wrappedValue = min(max($0.rounded(), 1), max(upper, 1)) }
+        )
     }
 
     private var scriptEditorResizeHandle: some View {

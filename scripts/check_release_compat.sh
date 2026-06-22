@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 PROJECT_FILE="$ROOT_DIR/notchprompt.xcodeproj/project.pbxproj"
-APP_PATH="${1:-$ROOT_DIR/build/release/Build/Products/Release/notchprompt.app}"
+APP_PATH="${1:-$ROOT_DIR/build/release/Build/Products/Release/Presentation Companion.app}"
 
 if [[ ! -f "$PROJECT_FILE" ]]; then
   echo "Project file not found: $PROJECT_FILE" >&2

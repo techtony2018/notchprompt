@@ -56,7 +56,7 @@ jobs:
       - name: Compatibility check (deployment target + bundled minimum system)
         run: |
           chmod +x scripts/check_release_compat.sh
-          ./scripts/check_release_compat.sh "build/release/Build/Products/Release/notchprompt.app"
+          ./scripts/check_release_compat.sh "build/release/Build/Products/Release/Presentation Companion.app"
 
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
@@ -65,8 +65,8 @@ jobs:
           files: dist/notchprompt-${{ env.RELEASE_TAG }}-macos.dmg
           body: |
             Install:
-            - Open the DMG and drag `notchprompt.app` to `/Applications`.
+            - Open the DMG and drag `Presentation Companion.app` to `/Applications`.
 
             If macOS says the app is damaged:
-            `xattr -cr /Applications/notchprompt.app && open /Applications/notchprompt.app`
+            `xattr -cr "/Applications/Presentation Companion.app" && open "/Applications/Presentation Companion.app"`
           generate_release_notes: true

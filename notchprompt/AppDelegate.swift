@@ -145,6 +145,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             model.$transcriptLanguageIdentifier.map { _ in () }.eraseToAnyPublisher(),
             model.$transcriptMatchConsecutiveWords.map { _ in () }.eraseToAnyPublisher(),
             model.$transcriptMaxForwardLookingWords.map { _ in () }.eraseToAnyPublisher(),
+            model.$fuzzyTranscriptMatching.map { _ in () }.eraseToAnyPublisher(),
             model.$voiceDetectionThresholdDb.map { _ in () }.eraseToAnyPublisher(),
             model.$secondsPerLine.map { _ in () }.eraseToAnyPublisher(),
             model.$fontSize.map { _ in () }.eraseToAnyPublisher(),
@@ -155,6 +156,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             model.$countdownSeconds.map { _ in () }.eraseToAnyPublisher(),
             model.$countdownBehavior.map { _ in () }.eraseToAnyPublisher(),
             model.$scrollMode.map { _ in () }.eraseToAnyPublisher(),
+            model.$showTimer.map { _ in () }.eraseToAnyPublisher(),
+            model.$timeWarningEnabled.map { _ in () }.eraseToAnyPublisher(),
+            model.$timeWarningDurationMinutes.map { _ in () }.eraseToAnyPublisher(),
+            model.$timeWarningYellowThresholdMinutes.map { _ in () }.eraseToAnyPublisher(),
+            model.$timeWarningRedThresholdMinutes.map { _ in () }.eraseToAnyPublisher(),
+            model.$timerOverlayOffsetX.map { _ in () }.eraseToAnyPublisher(),
+            model.$timerOverlayOffsetY.map { _ in () }.eraseToAnyPublisher(),
             model.$selectedScreenID.map { _ in () }.eraseToAnyPublisher()
         ]
 
@@ -188,6 +196,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             .receive(on: RunLoop.main)
             .sink { [weak self] identifier in
                 self?.voiceMonitor?.preferredRecognitionLocaleIdentifier = identifier == "auto" ? nil : identifier
+            }
+            .store(in: &cancellables)
+
+        Timer.publish(every: 1, on: .main, in: .common)
+            .autoconnect()
+            .sink { [weak self] date in
+                self?.model.tickPresentationTimer(now: date)
             }
             .store(in: &cancellables)
     }

@@ -4,16 +4,72 @@
 //
 
 import SwiftUI
+import Combine
 import Darwin
 import os
 import UIKit
 
 private let presentationLogger = Logger(subsystem: "notch.presentation-companion", category: "Presentation")
+private let timingAidMinutesRange: ClosedRange<Double> = 1...100
 
 private func presentationLog(_ message: String) {
     NSLog("Presentation Companion: %@", message)
     presentationLogger.notice("\(message, privacy: .public)")
 }
+
+#if DEBUG
+private final class IOSPerformanceTrace {
+    static let shared = IOSPerformanceTrace()
+
+    private var tickCount = 0
+    private var lastTickReport = CACurrentMediaTime()
+    private var lastTranscriptReport = CACurrentMediaTime()
+
+    func recordTick(
+        isRunning: Bool,
+        transcriptBasedPrompt: Bool,
+        isPresentationModeActive: Bool,
+        shouldShowSettingsSurface: Bool
+    ) {
+        tickCount += 1
+        let now = CACurrentMediaTime()
+        guard now - lastTickReport >= 1 else { return }
+        let ticksPerSecond = Double(tickCount) / max(now - lastTickReport, 0.001)
+        NSLog(
+            "PCompanionPerf tick %.1f/s running=%@ speech=%@ presentation=%@ settings=%@",
+            ticksPerSecond,
+            String(isRunning),
+            String(transcriptBasedPrompt),
+            String(isPresentationModeActive),
+            String(shouldShowSettingsSurface)
+        )
+        tickCount = 0
+        lastTickReport = now
+    }
+
+    func recordTranscriptMatch(
+        durationMs: Double,
+        transcriptTokens: Int,
+        scriptTokens: Int,
+        visibleTokens: Int,
+        searchTokens: Int,
+        matchedIndex: Int
+    ) {
+        let now = CACurrentMediaTime()
+        guard durationMs >= 8 || now - lastTranscriptReport >= 1 else { return }
+        NSLog(
+            "PCompanionPerf transcript %.2fms transcriptTokens=%d scriptTokens=%d visibleTokens=%d searchTokens=%d matchedIndex=%d",
+            durationMs,
+            transcriptTokens,
+            scriptTokens,
+            visibleTokens,
+            searchTokens,
+            matchedIndex
+        )
+        lastTranscriptReport = now
+    }
+}
+#endif
 
 private enum IOSScrollMode: String, CaseIterable {
     case infinite
@@ -40,6 +96,23 @@ private enum IOSCountdownBehavior: String, CaseIterable {
 private struct IOSTranscriptLanguageOption: Identifiable, Hashable {
     let id: String
     let label: String
+}
+
+private enum IOSPromptMode: String, CaseIterable {
+    case speed
+    case voice
+    case transcript
+
+    var label: String {
+        switch self {
+        case .speed:
+            return "Time"
+        case .voice:
+            return "Voice"
+        case .transcript:
+            return "Speech"
+        }
+    }
 }
 
 private enum PresentationCompanionDefaults {
@@ -103,6 +176,7 @@ struct PresentationCompanionView: View {
     @AppStorage("ios.transcriptLanguageIdentifier") private var transcriptLanguageIdentifier = "auto"
     @AppStorage("ios.transcriptMatchConsecutiveWords") private var transcriptMatchConsecutiveWords = 3
     @AppStorage("ios.transcriptMaxForwardLookingWords") private var transcriptMaxForwardLookingWords = 20
+    @AppStorage("ios.fuzzyTranscriptMatching") private var fuzzyTranscriptMatching = true
     @State private var detectedTranscriptLanguageIdentifier = "en-US"
     @AppStorage("ios.voiceDetectionThresholdDb") private var voiceDetectionThresholdDb = -30.0
     @State private var isPausedByVoiceMonitor = false
@@ -113,19 +187,47 @@ struct PresentationCompanionView: View {
     @State private var transcriptMatchedTokenIndex = -1
     @State private var transcriptConsumedTokenCount = 0
     @State private var transcriptVisibleUTF16Range: Range<Int> = 0..<Int.max
+    @State private var scriptTokenCache: [ScriptTokenInfo] = []
+    @State private var scriptLineEndOffsetCache: [Int] = []
     @State private var previousRecognizedTranscript = ""
     @State private var recognizedTranscriptDisplayLine = ""
     @State private var countdownTask: Task<Void, Never>?
     @State private var isPresentationModeActive = false
     @State private var shouldShowSettingsSurface = true
     @State private var promptTextWidth: CGFloat = 1
+    @AppStorage("ios.showTimer") private var showTimer = true
+    @AppStorage("ios.timeWarningEnabled") private var timeWarningEnabled = false
+    @AppStorage("ios.timeWarningDurationMinutes") private var timeWarningDurationMinutes: Double = 5
+    @AppStorage("ios.timeWarningYellowThresholdMinutes") private var timeWarningYellowThresholdMinutes: Double = 1
+    @AppStorage("ios.timeWarningRedThresholdMinutes") private var timeWarningRedThresholdMinutes: Double = 5
+    @AppStorage("ios.timerOverlayOffsetX") private var timerOverlayOffsetX: Double = 0
+    @AppStorage("ios.timerOverlayOffsetY") private var timerOverlayOffsetY: Double = 0
+    @State private var presentationElapsedSeconds: TimeInterval = 0
+    @State private var presentationTimerStartedAt: Date?
     @State private var linkInput = ""
     @State private var isLoadLinkPresented = false
     @State private var isLoadingLink = false
     @State private var loadLinkErrorMessage: String?
+    @AppStorage("ios.promptToolbarOffsetX") private var promptToolbarOffsetX: Double = 0
+    @AppStorage("ios.promptToolbarOffsetY") private var promptToolbarOffsetY: Double = 0
+    @AppStorage("ios.promptToolbarOpacity") private var promptToolbarOpacity: Double = 1
+    @State private var promptToolbarDragStartOffset: CGSize?
+    @State private var timerOverlayDragStartOffset: CGSize?
     @FocusState private var isScriptFocused: Bool
 
-    private let timer = Timer.publish(every: 1.0 / 60.0, on: .main, in: .common).autoconnect()
+    private var timerInterval: TimeInterval {
+        if isPresentationModeActive && isRunning && !transcriptBasedPrompt {
+            return 1.0 / 60.0
+        }
+        if isRunning {
+            return 0.1
+        }
+        return 1.0
+    }
+
+    private var timer: Publishers.Autoconnect<Timer.TimerPublisher> {
+        Timer.publish(every: timerInterval, on: .main, in: .common).autoconnect()
+    }
     private let transcriptLanguageOptions: [IOSTranscriptLanguageOption] = [
         IOSTranscriptLanguageOption(id: "auto", label: "Auto"),
         IOSTranscriptLanguageOption(id: "en-US", label: "English"),
@@ -165,8 +267,10 @@ struct PresentationCompanionView: View {
                 viewportHeight = proxy.size.height
                 promptTextWidth = max(proxy.size.width - 48, 1)
                 refreshDetectedTranscriptLanguage()
+                refreshScriptAnalysis()
                 migrateLineBasedPlaybackDefaultsIfNeeded()
                 normalizeVoiceModeSelection()
+                normalizeTimeWarningSettings()
                 updateVoiceMonitor()
             }
         }
@@ -175,8 +279,9 @@ struct PresentationCompanionView: View {
         }
         .onChange(of: script) { _, _ in
             refreshDetectedTranscriptLanguage()
+            refreshScriptAnalysis()
             voiceMonitor.scriptText = script
-            resetScroll()
+            resetScroll(resetTimer: false)
         }
         .onChange(of: autoPauseResumeWithLocalMic) { _, isEnabled in
             if isEnabled {
@@ -204,6 +309,20 @@ struct PresentationCompanionView: View {
             transcriptSpokenCharacterEnd = 0
             transcriptMatchedTokenIndex = -1
             transcriptConsumedTokenCount = 0
+        }
+        .onChange(of: fuzzyTranscriptMatching) { _, _ in
+            transcriptSpokenCharacterEnd = 0
+            transcriptMatchedTokenIndex = -1
+            transcriptConsumedTokenCount = 0
+        }
+        .onChange(of: timeWarningDurationMinutes) { _, _ in
+            syncDefaultTimeWarningThresholds()
+        }
+        .onChange(of: timeWarningYellowThresholdMinutes) { _, _ in
+            normalizeTimeWarningSettings()
+        }
+        .onChange(of: timeWarningRedThresholdMinutes) { _, _ in
+            normalizeTimeWarningSettings()
         }
         .onChange(of: voiceDetectionThresholdDb) { _, thresholdDb in
             voiceMonitor.voiceDetectionThresholdDb = thresholdDb
@@ -246,8 +365,6 @@ struct PresentationCompanionView: View {
                 .ignoresSafeArea()
 
             VStack(spacing: 0) {
-                promptToolbar
-
                 promptSurface
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
 
@@ -255,8 +372,94 @@ struct PresentationCompanionView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
+            floatingPromptToolbar
+            if shouldShowTimerIndicator {
+                timerIndicator
+            }
             promptOverlayMessage
         }
+    }
+
+    private var shouldShowTimerIndicator: Bool {
+        showTimer && isPresentationModeActive
+    }
+
+    private var timerIndicator: some View {
+        Text(timerText)
+            .font(.system(size: 13, weight: .semibold, design: .rounded))
+            .monospacedDigit()
+            .foregroundStyle(timerColor)
+            .opacity(timerTextOpacity)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .shadow(color: .black.opacity(0.65), radius: 3, x: 0, y: 1)
+            .contentShape(Rectangle())
+            .offset(x: timerOverlayOffsetX, y: timerOverlayOffsetY)
+            .gesture(timerDragGesture)
+            .padding(.top, 88)
+            .padding(.trailing, 14)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+    }
+
+    private var timerDragGesture: some Gesture {
+        DragGesture()
+            .onChanged { value in
+                let startOffset = timerOverlayDragStartOffset ?? CGSize(
+                    width: timerOverlayOffsetX,
+                    height: timerOverlayOffsetY
+                )
+                timerOverlayDragStartOffset = startOffset
+                timerOverlayOffsetX = Double(startOffset.width + value.translation.width)
+                timerOverlayOffsetY = Double(startOffset.height + value.translation.height)
+            }
+            .onEnded { _ in
+                timerOverlayDragStartOffset = nil
+            }
+    }
+
+    private var timerText: String {
+        let elapsed = formattedTimerDuration(presentationElapsedSeconds)
+        guard timeWarningEnabled else { return elapsed }
+        return "\(elapsed) / \(formattedTimerDuration(timeWarningRedThresholdMinutes * 60))"
+    }
+
+    private var timerColor: Color {
+        guard timeWarningEnabled else {
+            return .white.opacity(0.86)
+        }
+        let redSeconds = max(timeWarningRedThresholdMinutes * 60, 1)
+        let yellowRemainingSeconds = max(timeWarningYellowThresholdMinutes * 60, 1)
+        if presentationElapsedSeconds >= redSeconds {
+            return .red
+        }
+        if redSeconds - presentationElapsedSeconds <= yellowRemainingSeconds {
+            return .yellow
+        }
+        return .green
+    }
+
+    private var timerTextOpacity: Double {
+        guard isTimerInYellowWarningWindow else { return 1 }
+        return Int((presentationElapsedSeconds * 10).rounded(.down)).isMultiple(of: 2) ? 1 : 0.28
+    }
+
+    private var isTimerInYellowWarningWindow: Bool {
+        guard timeWarningEnabled else { return false }
+        let redSeconds = max(timeWarningRedThresholdMinutes * 60, 1)
+        let yellowRemainingSeconds = max(timeWarningYellowThresholdMinutes * 60, 1)
+        return presentationElapsedSeconds < redSeconds &&
+            redSeconds - presentationElapsedSeconds <= yellowRemainingSeconds
+    }
+
+    private func formattedTimerDuration(_ duration: TimeInterval) -> String {
+        let totalSeconds = max(0, Int(duration.rounded()))
+        let hours = totalSeconds / 3600
+        let minutes = (totalSeconds % 3600) / 60
+        let seconds = totalSeconds % 60
+        if hours > 0 {
+            return String(format: "%d:%02d:%02d", hours, minutes, seconds)
+        }
+        return String(format: "%d:%02d", minutes, seconds)
     }
 
     @ViewBuilder
@@ -393,13 +596,9 @@ struct PresentationCompanionView: View {
 
     private var bottomStatusLine: some View {
         HStack(spacing: 8) {
-            if autoPauseResumeWithLocalMic || transcriptBasedPrompt || !recognizedTranscriptDisplayLine.isEmpty {
-                statusLeadingLabel
-                    .frame(width: autoPauseResumeWithLocalMic ? 86 : 108, alignment: .leading)
-                unifiedStatusArea
-            } else {
-                Spacer(minLength: 0)
-            }
+            statusLeadingLabel
+                .frame(width: statusLeadingLabelWidth, alignment: .leading)
+            unifiedStatusArea
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
@@ -424,7 +623,7 @@ struct PresentationCompanionView: View {
         } else if transcriptBasedPrompt {
             unifiedStatusText(recognizedTranscriptDisplayLine, color: .blue, weight: .medium)
         } else {
-            Spacer(minLength: 0)
+            unifiedStatusText("\(Int(secondsPerLine.rounded()))s/line", color: .white.opacity(0.82), weight: .semibold)
         }
     }
 
@@ -450,13 +649,66 @@ struct PresentationCompanionView: View {
             .font(.system(size: 11, weight: .semibold))
             .lineLimit(1)
         } else if transcriptBasedPrompt {
-            Text(transcriptLanguageLabel(for: effectiveTranscriptLanguageIdentifier))
+            Menu {
+                Picker("Speech recognition language", selection: $transcriptLanguageIdentifier) {
+                    Text("Auto (\(transcriptLanguageLabel(for: detectedTranscriptLanguageIdentifier)))").tag("auto")
+                    ForEach(transcriptLanguageOptions.filter { $0.id != "auto" }) { option in
+                        Text(option.label).tag(option.id)
+                    }
+                }
+            } label: {
+                HStack(spacing: 3) {
+                    Text(transcriptLanguageLabel(for: effectiveTranscriptLanguageIdentifier))
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundStyle(.white.opacity(0.58))
+                }
                 .foregroundStyle(.blue)
                 .font(.system(size: 11, weight: .semibold))
                 .lineLimit(1)
+            }
+            .buttonStyle(.plain)
         } else {
-            EmptyView()
+            Text("Speed:")
+                .foregroundStyle(.white.opacity(0.72))
+                .font(.system(size: 11, weight: .semibold))
+                .lineLimit(1)
         }
+    }
+
+    private var statusLeadingLabelWidth: CGFloat {
+        if autoPauseResumeWithLocalMic {
+            return 86
+        }
+        if transcriptBasedPrompt {
+            return 108
+        }
+        return 58
+    }
+
+    private var floatingPromptToolbar: some View {
+        GeometryReader { proxy in
+            promptToolbar
+                .fixedSize(horizontal: true, vertical: true)
+                .position(x: proxy.size.width / 2, y: 44)
+                .offset(x: promptToolbarOffsetX, y: promptToolbarOffsetY)
+                .gesture(
+                    DragGesture()
+                        .onChanged { value in
+                            let start = promptToolbarDragStartOffset ?? CGSize(
+                                width: promptToolbarOffsetX,
+                                height: promptToolbarOffsetY
+                            )
+                            promptToolbarDragStartOffset = start
+                            promptToolbarOffsetX = Double(start.width + value.translation.width)
+                            promptToolbarOffsetY = Double(start.height + value.translation.height)
+                        }
+                        .onEnded { _ in
+                            promptToolbarDragStartOffset = nil
+                        }
+                )
+        }
+        .allowsHitTesting(true)
     }
 
     private var promptToolbar: some View {
@@ -504,25 +756,9 @@ struct PresentationCompanionView: View {
             )
 
             Button {
-                openSettings()
-            } label: {
-                Image(systemName: "gearshape.fill")
-                    .font(.headline)
-                    .frame(width: 34, height: 34)
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(.white)
-            .background(.white.opacity(0.16), in: Circle())
-            .accessibilityLabel("Settings")
-            .accessibilityIdentifier("settingsButton")
-            .layoutPriority(1)
-
-            Spacer(minLength: 8)
-
-            Button {
                 if let text = UIPasteboard.general.string {
                     script = text
-                    resetScroll()
+                    resetScroll(resetTimer: false)
                 }
             } label: {
                 Image(systemName: "doc.on.clipboard")
@@ -536,7 +772,7 @@ struct PresentationCompanionView: View {
 
             Button {
                 script = ""
-                resetScroll()
+                resetScroll(resetTimer: false)
             } label: {
                 Image(systemName: "trash")
                     .font(.headline)
@@ -548,26 +784,28 @@ struct PresentationCompanionView: View {
             .accessibilityLabel("Clear script")
 
             Button {
-                exit(0)
+                openSettings()
             } label: {
-                Image(systemName: "xmark")
+                Image(systemName: "gearshape.fill")
                     .font(.headline)
                     .frame(width: 34, height: 34)
             }
             .buttonStyle(.plain)
             .foregroundStyle(.white)
             .background(.white.opacity(0.16), in: Circle())
-            .accessibilityLabel("Quit Presentation Companion")
+            .accessibilityLabel("Settings")
+            .accessibilityIdentifier("settingsButton")
+            .layoutPriority(1)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
-        .background(
-            LinearGradient(
-                colors: [.black.opacity(0.74), .black.opacity(0.0)],
-                startPoint: .top,
-                endPoint: .bottom
-            )
+        .background(.black.opacity(0.78), in: Capsule())
+        .overlay(
+            Capsule()
+                .stroke(.white.opacity(0.12), lineWidth: 1)
         )
+        .shadow(color: .black.opacity(0.26), radius: 14, x: 0, y: 8)
+        .opacity(promptToolbarOpacity)
     }
 
     private func toolbarJumpButton(
@@ -708,15 +946,10 @@ struct PresentationCompanionView: View {
                     }
 
                     settingsSection("Playback") {
-                        sliderRow("Scroll speed", value: $secondsPerLine, range: 1...20, step: 1, suffix: "s/line")
-
-                        sliderRow("Forward/backward pace", value: $paceLines, range: 1...10, step: 1, suffix: " lines")
-
-                        Picker("Scroll mode", selection: scrollModeBinding) {
-                            Text("Infinite").tag(IOSScrollMode.infinite)
-                            Text("Stop at end").tag(IOSScrollMode.stopAtEnd)
-                        }
-                        .pickerStyle(.segmented)
+                        Toggle("Play in loops", isOn: Binding(
+                            get: { scrollMode == .infinite },
+                            set: { scrollModeBinding.wrappedValue = $0 ? .infinite : .stopAtEnd }
+                        ))
 
                         HStack {
                             Text("Countdown")
@@ -747,50 +980,63 @@ struct PresentationCompanionView: View {
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
                         }
-                    }
 
-                    settingsSection("Appearance") {
-                        sliderRow("Font size", value: $fontSize, range: 16...60, step: 1, suffix: " pt")
-                    }
+                        sliderRow("Forward/backward pace", value: $paceLines, range: 1...10, step: 1, suffix: " lines")
 
-                    settingsSection("Voice") {
-                        Toggle("Auto pause/resume from voice", isOn: $autoPauseResumeWithLocalMic)
-                        sliderRow("Voice detection threshold", value: $voiceDetectionThresholdDb, range: -70...20, step: 1, suffix: " dB")
+                        HStack {
+                            Text("Scroll mode")
+                            Spacer()
+                            Picker("Scroll mode", selection: promptModeBinding) {
+                                ForEach(IOSPromptMode.allCases, id: \.self) { mode in
+                                    Text(mode.label).tag(mode)
+                                }
+                            }
+                            .labelsHidden()
+                            .pickerStyle(.segmented)
+                            .frame(maxWidth: 260)
+                        }
+
+                        if promptMode == .speed {
+                            sliderRow("Scroll speed", value: $secondsPerLine, range: 1...20, step: 1, suffix: "s/line")
+                                .padding(.leading, 18)
+                        }
+
+                        if promptMode == .voice {
+                            sliderRow("Voice detection threshold", value: $voiceDetectionThresholdDb, range: -70...20, step: 1, suffix: " dB")
+                                .padding(.leading, 18)
+                        }
+
+                        if promptMode == .transcript {
+                            Stepper(
+                                "Match consecutive words: \(transcriptMatchConsecutiveWords)",
+                                value: $transcriptMatchConsecutiveWords,
+                                in: 1...10
+                            )
                             .padding(.leading, 18)
-                            .disabled(!autoPauseResumeWithLocalMic)
-                            .opacity(autoPauseResumeWithLocalMic ? 1 : 0.55)
 
-                        Toggle("Transcript based prompt", isOn: $transcriptBasedPrompt)
-                        Stepper(
-                            "Match consecutive words: \(transcriptMatchConsecutiveWords)",
-                            value: $transcriptMatchConsecutiveWords,
-                            in: 1...10
-                        )
-                        .padding(.leading, 18)
-                        .disabled(!transcriptBasedPrompt)
-                        .opacity(transcriptBasedPrompt ? 1 : 0.55)
+                            Stepper(
+                                "Max forward looking words: \(transcriptMaxForwardLookingWords)",
+                                value: $transcriptMaxForwardLookingWords,
+                                in: 5...100
+                            )
+                            .padding(.leading, 18)
 
-                        Stepper(
-                            "Max forward looking words: \(transcriptMaxForwardLookingWords)",
-                            value: $transcriptMaxForwardLookingWords,
-                            in: 5...100
-                        )
-                        .padding(.leading, 18)
-                        .disabled(!transcriptBasedPrompt)
-                        .opacity(transcriptBasedPrompt ? 1 : 0.55)
+                            Toggle("Fuzzy transcript matching", isOn: $fuzzyTranscriptMatching)
+                                .padding(.leading, 18)
+                        }
 
-                        if voiceMonitor.isMonitoring {
+                        if promptMode == .voice, voiceMonitor.isMonitoring {
                             Text("Mic: \(voiceMonitor.isVoiceActive ? "voice detected" : "listening") · \(Int(voiceMonitor.inputLevelDb.rounded())) dB")
                                 .font(.footnote)
                                 .foregroundStyle(voiceMonitor.isVoiceActive ? .green : .secondary)
                         }
 
-                        if let message = voiceMonitor.unavailableMessage {
+                        if promptMode == .voice, let message = voiceMonitor.unavailableMessage {
                             Text(message)
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
                         }
-                        if let message = voiceMonitor.transcriptUnavailableMessage {
+                        if promptMode == .transcript, let message = voiceMonitor.transcriptUnavailableMessage {
                             Text(message)
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
@@ -798,14 +1044,30 @@ struct PresentationCompanionView: View {
 
                     }
 
-                    settingsSection("About") {
-                        Link("GitHub repository", destination: URL(string: "https://github.com/techtony2018/notchprompt")!)
+                    settingsSection("Presentation timing aid") {
+                        Toggle("Show timer", isOn: $showTimer)
 
-                        HStack {
-                            Text("Version")
-                            Spacer()
-                            Text(appVersionText)
-                                .foregroundStyle(.secondary)
+                        Toggle("Colored time warning", isOn: $timeWarningEnabled)
+                            .disabled(!showTimer)
+                            .opacity(showTimer ? 1 : 0.55)
+
+                        sliderRow("Full duration", value: clampedTimeBinding($timeWarningDurationMinutes, upper: timingAidMinutesRange.upperBound), range: timingAidMinutesRange, step: 1, suffix: " min")
+                            .disabled(!showTimer || !timeWarningEnabled)
+                            .opacity(showTimer && timeWarningEnabled ? 1 : 0.55)
+
+                        sliderRow("Blinking yellow at", value: clampedTimeBinding($timeWarningYellowThresholdMinutes, upper: max(timeWarningRedThresholdMinutes, 1)), range: timingAidMinutesRange, step: 1, suffix: " min")
+                            .disabled(!showTimer || !timeWarningEnabled)
+                            .opacity(showTimer && timeWarningEnabled ? 1 : 0.55)
+
+                        sliderRow("Red at", value: clampedTimeBinding($timeWarningRedThresholdMinutes, upper: timingAidMinutesRange.upperBound), range: timingAidMinutesRange, step: 1, suffix: " min")
+                            .disabled(!showTimer || !timeWarningEnabled)
+                            .opacity(showTimer && timeWarningEnabled ? 1 : 0.55)
+                    }
+
+                    settingsSection("Appearance") {
+                        sliderRow("Font size", value: $fontSize, range: 16...60, step: 1, suffix: " pt")
+                        sliderRow("Tool bar opacity", value: $promptToolbarOpacity, range: 0.25...1, step: 0.05) { value in
+                            "\(Int((value * 100).rounded()))%"
                         }
                     }
 
@@ -843,9 +1105,8 @@ struct PresentationCompanionView: View {
                 }
 
                 ToolbarItem(placement: .topBarTrailing) {
-                    Text(appVersionText)
+                    Link(appVersionText, destination: URL(string: "https://github.com/techtony2018/notchprompt")!)
                         .font(.footnote.weight(.medium))
-                        .foregroundStyle(.secondary)
                 }
 
                 ToolbarItemGroup(placement: .keyboard) {
@@ -901,7 +1162,7 @@ struct PresentationCompanionView: View {
     private var floatingPresentButton: some View {
         Button {
             dismissScriptKeyboard()
-            resumeManually()
+            presentFromSettings()
         } label: {
             Label("Present", systemImage: "play.fill")
                 .font(.headline.weight(.semibold))
@@ -967,14 +1228,76 @@ struct PresentationCompanionView: View {
         }
     }
 
+    private func clampedTimeBinding(_ binding: Binding<Double>, upper: Double) -> Binding<Double> {
+        Binding(
+            get: { min(max(binding.wrappedValue, 1), max(upper, 1)) },
+            set: { binding.wrappedValue = min(max($0.rounded(), 1), max(upper, 1)) }
+        )
+    }
+
     private func tick(at date: Date) {
-        defer { lastTickDate = date }
-        guard isRunning else { return }
-        guard !transcriptBasedPrompt else { return }
+        #if DEBUG
+        IOSPerformanceTrace.shared.recordTick(
+            isRunning: isRunning,
+            transcriptBasedPrompt: transcriptBasedPrompt,
+            isPresentationModeActive: isPresentationModeActive,
+            shouldShowSettingsSurface: shouldShowSettingsSurface
+        )
+        #endif
+        guard isRunning else {
+            if lastTickDate != nil {
+                lastTickDate = nil
+            }
+            if presentationTimerStartedAt != nil {
+                presentationTimerStartedAt = nil
+            }
+            return
+        }
+
+        tickPresentationTimer(at: date)
+        guard !transcriptBasedPrompt else {
+            lastTickDate = date
+            return
+        }
 
         let deltaTime = min(max(date.timeIntervalSince(lastTickDate ?? date), 0), 0.25)
         scrollOffset += promptLineHeight * CGFloat(deltaTime) / max(CGFloat(secondsPerLine), 0.1)
         clampScroll()
+        lastTickDate = date
+    }
+
+    private func tickPresentationTimer(at date: Date) {
+        guard isRunning else {
+            if presentationTimerStartedAt != nil {
+                presentationTimerStartedAt = nil
+            }
+            return
+        }
+
+        guard let startedAt = presentationTimerStartedAt else {
+            presentationTimerStartedAt = date
+            return
+        }
+
+        let deltaTime = min(max(date.timeIntervalSince(startedAt), 0), 1.5)
+        presentationElapsedSeconds += deltaTime
+        presentationTimerStartedAt = date
+    }
+
+    private func syncDefaultTimeWarningThresholds() {
+        let duration = min(max(timeWarningDurationMinutes.rounded(), timingAidMinutesRange.lowerBound), timingAidMinutesRange.upperBound)
+        timeWarningDurationMinutes = duration
+        timeWarningYellowThresholdMinutes = max(1, ceil(duration * 0.8))
+        timeWarningRedThresholdMinutes = duration
+    }
+
+    private func normalizeTimeWarningSettings() {
+        timeWarningDurationMinutes = min(max(timeWarningDurationMinutes.rounded(), timingAidMinutesRange.lowerBound), timingAidMinutesRange.upperBound)
+        timeWarningRedThresholdMinutes = min(max(timeWarningRedThresholdMinutes.rounded(), timingAidMinutesRange.lowerBound), timingAidMinutesRange.upperBound)
+        timeWarningYellowThresholdMinutes = min(
+            max(timeWarningYellowThresholdMinutes.rounded(), timingAidMinutesRange.lowerBound),
+            max(timeWarningRedThresholdMinutes, 1)
+        )
     }
 
     private func togglePlayback() {
@@ -1004,7 +1327,7 @@ struct PresentationCompanionView: View {
         }
     }
 
-    private func resetScroll() {
+    private func resetScroll(resetTimer: Bool = true) {
         presentationLogger.notice("resetScroll")
         stopPlayback()
         isManuallyPaused = false
@@ -1015,6 +1338,10 @@ struct PresentationCompanionView: View {
         transcriptVisibleUTF16Range = 0..<Int.max
         previousRecognizedTranscript = ""
         recognizedTranscriptDisplayLine = ""
+        if resetTimer {
+            presentationElapsedSeconds = 0
+            presentationTimerStartedAt = nil
+        }
         voiceMonitor.resetTranscriptState()
         lastTickDate = nil
         isPausedByVoiceMonitor = false
@@ -1025,13 +1352,19 @@ struct PresentationCompanionView: View {
     private func openSettings() {
         presentationLog("openSettings")
         isScriptFocused = false
-        stopPlayback()
         isPresentationModeActive = false
         shouldShowSettingsSurface = true
-        isPausedByVoiceMonitor = false
-        isVoiceResumeBlockedByManualPause = false
-        isWaitingForVoiceStart = false
-        isManuallyPaused = false
+    }
+
+    private func presentFromSettings() {
+        presentationLog("presentFromSettings running=\(isRunning) counting=\(isCountingDown) waiting=\(isWaitingForVoiceStart)")
+        isScriptFocused = false
+        if isRunning || isCountingDown || isWaitingForVoiceStart {
+            isPresentationModeActive = true
+            shouldShowSettingsSurface = false
+            return
+        }
+        resumeManually()
     }
 
     private func loadScriptFromLink() async {
@@ -1042,7 +1375,7 @@ struct PresentationCompanionView: View {
         do {
             script = try await ScriptLinkLoader.loadScript(from: linkInput)
             sourceLink = linkInput.trimmingCharacters(in: .whitespacesAndNewlines)
-            resetScroll()
+            resetScroll(resetTimer: false)
         } catch {
             loadLinkErrorMessage = error.localizedDescription
         }
@@ -1105,6 +1438,11 @@ struct PresentationCompanionView: View {
         if !transcriptLanguageOptions.contains(where: { $0.id == transcriptLanguageIdentifier }) {
             transcriptLanguageIdentifier = "auto"
         }
+    }
+
+    private func refreshScriptAnalysis() {
+        scriptTokenCache = scriptTokenInfos(in: script)
+        scriptLineEndOffsetCache = lineEndOffsets(in: script)
     }
 
     private func transcriptLanguageLabel(for identifier: String) -> String {
@@ -1204,6 +1542,7 @@ struct PresentationCompanionView: View {
         countdownRemaining = 0
         isRunning = false
         isWaitingForVoiceStart = false
+        presentationTimerStartedAt = nil
     }
 
     private func beginCountdown(seconds: Int) {
@@ -1260,6 +1599,7 @@ struct PresentationCompanionView: View {
         isWaitingForVoiceStart = false
         isManuallyPaused = false
         isRunning = true
+        presentationTimerStartedAt = nil
         lastTickDate = nil
     }
 
@@ -1351,9 +1691,17 @@ struct PresentationCompanionView: View {
         let progress = transcriptProgress(for: transcript)
         transcriptSpokenCharacterEnd = progress.spokenCharacterEnd
         guard progress.spokenCharacterEnd > 0 else { return }
+        applyTranscriptViewportAnchor(spokenCharacterEnd: progress.spokenCharacterEnd)
+    }
+
+    private func applyTranscriptViewportAnchor(spokenCharacterEnd: Int) {
         let maxOffset = max(contentHeight - viewportHeight, 0)
-        let targetOffset = renderedPromptHeight(upToUTF16Offset: progress.spokenCharacterEnd) - (promptViewportHeight * 0.5)
-        guard abs(targetOffset - scrollOffset) > 2 else { return }
+        guard maxOffset > 0 else { return }
+        let spokenBottom = renderedPromptHeight(upToUTF16Offset: spokenCharacterEnd)
+        let bottomThirdThreshold = scrollOffset + (promptViewportHeight * (2.0 / 3.0))
+        guard spokenBottom >= bottomThirdThreshold else { return }
+        let targetOffset = spokenBottom - promptLineHeight
+        guard targetOffset > scrollOffset + 2 else { return }
         scrollOffset = min(max(targetOffset, 0), maxOffset)
     }
 
@@ -1362,14 +1710,39 @@ struct PresentationCompanionView: View {
     }
 
     private func transcriptProgress(for transcript: String) -> (lineCompletedFraction: Double, spokenCharacterEnd: Int) {
-        let scriptTokens = scriptTokenInfos(in: script)
+        #if DEBUG
+        let traceStart = CACurrentMediaTime()
+        var traceTranscriptTokenCount = 0
+        var traceScriptTokenCount = 0
+        var traceVisibleTokenCount = 0
+        var traceSearchTokenCount = 0
+        var traceMatchedIndex = transcriptMatchedTokenIndex
+        defer {
+            IOSPerformanceTrace.shared.recordTranscriptMatch(
+                durationMs: (CACurrentMediaTime() - traceStart) * 1000,
+                transcriptTokens: traceTranscriptTokenCount,
+                scriptTokens: traceScriptTokenCount,
+                visibleTokens: traceVisibleTokenCount,
+                searchTokens: traceSearchTokenCount,
+                matchedIndex: traceMatchedIndex
+            )
+        }
+        #endif
+        let scriptTokens = scriptTokenCache.isEmpty ? scriptTokenInfos(in: script) : scriptTokenCache
         let transcriptTokens = normalizedTokens(transcript)
+        #if DEBUG
+        traceScriptTokenCount = scriptTokens.count
+        traceTranscriptTokenCount = transcriptTokens.count
+        #endif
         guard !scriptTokens.isEmpty, !transcriptTokens.isEmpty else { return (0, 0) }
         if transcriptConsumedTokenCount > transcriptTokens.count {
             transcriptConsumedTokenCount = 0
         }
 
         let visibleTokenRange = visibleTokenRange(in: scriptTokens)
+        #if DEBUG
+        traceVisibleTokenCount = visibleTokenRange.count
+        #endif
         guard visibleTokenRange.lowerBound < visibleTokenRange.upperBound else {
             guard transcriptMatchedTokenIndex >= 0 else { return (0, 0) }
             return scriptProgress(at: transcriptMatchedTokenIndex, in: scriptTokens)
@@ -1386,6 +1759,9 @@ struct PresentationCompanionView: View {
             : visibleTokenRange.lowerBound
         let forwardRangeStart = isCurrentAnchorVisible ? anchorIndex + 1 : visibleTokenRange.lowerBound
         let searchEnd = min(visibleTokenRange.upperBound, forwardRangeStart + transcriptMaxForwardLookingWords)
+        #if DEBUG
+        traceSearchTokenCount = max(searchEnd - searchStart, 0)
+        #endif
         guard searchStart < searchEnd else {
             guard transcriptMatchedTokenIndex >= 0 else { return (0, 0) }
             return scriptProgress(at: transcriptMatchedTokenIndex, in: scriptTokens)
@@ -1397,11 +1773,12 @@ struct PresentationCompanionView: View {
         let transcriptSearchStart = max(0, transcriptConsumedTokenCount - overlap)
 
         for transcriptStart in transcriptSearchStart..<transcriptTokens.count {
-            for scriptStart in searchStart..<searchEnd where scriptTokens[scriptStart].text == transcriptTokens[transcriptStart] {
+            for scriptStart in searchStart..<searchEnd where tokensMatch(scriptTokens[scriptStart].text, transcriptTokens[transcriptStart]) {
                 var runLength = 0
                 while transcriptStart + runLength < transcriptTokens.count,
                       scriptStart + runLength < scriptTokens.count,
-                      scriptTokens[scriptStart + runLength].text == transcriptTokens[transcriptStart + runLength] {
+                      scriptStart + runLength < searchEnd,
+                      tokensMatch(scriptTokens[scriptStart + runLength].text, transcriptTokens[transcriptStart + runLength]) {
                     runLength += 1
                 }
 
@@ -1421,7 +1798,54 @@ struct PresentationCompanionView: View {
         guard matchedIndex >= 0 else { return (0, 0) }
         transcriptMatchedTokenIndex = matchedIndex
         transcriptConsumedTokenCount = max(transcriptConsumedTokenCount, matchedTranscriptEnd)
+        #if DEBUG
+        traceMatchedIndex = matchedIndex
+        #endif
         return scriptProgress(at: matchedIndex, in: scriptTokens)
+    }
+
+    private func tokensMatch(_ scriptToken: String, _ transcriptToken: String) -> Bool {
+        guard scriptToken != transcriptToken else { return true }
+        guard fuzzyTranscriptMatching else { return false }
+        guard scriptToken.count > 3, transcriptToken.count > 3 else { return false }
+        guard scriptToken.unicodeScalars.allSatisfy({ !$0.isCJKToken }),
+              transcriptToken.unicodeScalars.allSatisfy({ !$0.isCJKToken }) else { return false }
+
+        let lengthDelta = abs(scriptToken.count - transcriptToken.count)
+        let maxLength = max(scriptToken.count, transcriptToken.count)
+        guard lengthDelta <= max(2, maxLength / 4) else { return false }
+
+        let limit = maxLength >= 8 ? 2 : 1
+        return boundedEditDistance(scriptToken, transcriptToken, limit: limit) <= limit
+    }
+
+    private func boundedEditDistance(_ lhs: String, _ rhs: String, limit: Int) -> Int {
+        let lhsCharacters = Array(lhs)
+        let rhsCharacters = Array(rhs)
+        if abs(lhsCharacters.count - rhsCharacters.count) > limit {
+            return limit + 1
+        }
+
+        var previous = Array(0...rhsCharacters.count)
+        for (lhsIndex, lhsCharacter) in lhsCharacters.enumerated() {
+            var current = [lhsIndex + 1]
+            var rowMinimum = current[0]
+            for (rhsIndex, rhsCharacter) in rhsCharacters.enumerated() {
+                let cost = lhsCharacter == rhsCharacter ? 0 : 1
+                let value = min(
+                    previous[rhsIndex + 1] + 1,
+                    current[rhsIndex] + 1,
+                    previous[rhsIndex] + cost
+                )
+                current.append(value)
+                rowMinimum = min(rowMinimum, value)
+            }
+            if rowMinimum > limit {
+                return limit + 1
+            }
+            previous = current
+        }
+        return previous.last ?? limit + 1
     }
 
     private func visibleTokenRange(in scriptTokens: [ScriptTokenInfo]) -> Range<Int> {
@@ -1433,7 +1857,7 @@ struct PresentationCompanionView: View {
 
     private func scriptProgress(at matchedIndex: Int, in scriptTokens: [ScriptTokenInfo]) -> (lineCompletedFraction: Double, spokenCharacterEnd: Int) {
         let spokenEnd = scriptTokens[matchedIndex].range.upperBound
-        let lineEndOffsets = lineEndOffsets(in: script)
+        let lineEndOffsets = scriptLineEndOffsetCache.isEmpty ? lineEndOffsets(in: script) : scriptLineEndOffsetCache
         let currentLine = scriptTokens[matchedIndex].lineIndex
         let isLastScriptToken = matchedIndex == scriptTokens.count - 1
         let completedLine = isLastScriptToken ? currentLine : currentLine - 1
@@ -1593,7 +2017,7 @@ struct PresentationCompanionView: View {
             }
             let lineIndex = max(0, lineStarts.lastIndex(where: { $0 <= start }) ?? 0)
             tokens.append(ScriptTokenInfo(
-                text: current.lowercased(),
+                text: Self.normalizedPromptToken(current),
                 range: start..<endOffset,
                 lineIndex: lineIndex
             ))
@@ -1610,7 +2034,7 @@ struct PresentationCompanionView: View {
             if scalar.isCJKToken {
                 flushCurrent(endingAt: start)
                 let lineIndex = max(0, lineStarts.lastIndex(where: { $0 <= start }) ?? 0)
-                tokens.append(ScriptTokenInfo(text: scalarText.lowercased(), range: start..<end, lineIndex: lineIndex))
+                tokens.append(ScriptTokenInfo(text: Self.normalizedPromptToken(scalarText), range: start..<end, lineIndex: lineIndex))
             } else if scalar.isPromptWordToken {
                 if currentStart == nil {
                     currentStart = start
@@ -1624,6 +2048,12 @@ struct PresentationCompanionView: View {
 
         flushCurrent(endingAt: offset)
         return tokens
+    }
+
+    private static func normalizedPromptToken(_ token: String) -> String {
+        token
+            .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+            .lowercased()
     }
 
     private func lineStartOffsets(in text: String) -> [Int] {
@@ -1672,6 +2102,36 @@ struct PresentationCompanionView: View {
         Binding(
             get: { scrollMode },
             set: { scrollModeRaw = $0.rawValue }
+        )
+    }
+
+    private var promptMode: IOSPromptMode {
+        if transcriptBasedPrompt {
+            return .transcript
+        }
+        if autoPauseResumeWithLocalMic {
+            return .voice
+        }
+        return .speed
+    }
+
+    private var promptModeBinding: Binding<IOSPromptMode> {
+        Binding(
+            get: { promptMode },
+            set: { mode in
+                switch mode {
+                case .speed:
+                    autoPauseResumeWithLocalMic = false
+                    transcriptBasedPrompt = false
+                case .voice:
+                    autoPauseResumeWithLocalMic = true
+                    transcriptBasedPrompt = false
+                case .transcript:
+                    autoPauseResumeWithLocalMic = false
+                    transcriptBasedPrompt = true
+                }
+                updateVoiceMonitor()
+            }
         )
     }
 

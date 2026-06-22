@@ -59,6 +59,7 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
     @Published private(set) var detectedTranscriptLanguageIdentifier: String = "en-US"
     @Published var transcriptMatchConsecutiveWords: Int = 3
     @Published var transcriptMaxForwardLookingWords: Int = 20
+    @Published var fuzzyTranscriptMatching: Bool = true
     @Published var voiceDetectionThresholdDb: Double = -30
     @Published private(set) var voiceInputLevelDb: Double = -160
     @Published var voiceControlUnavailableMessage: String?
@@ -76,6 +77,7 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
     @Published var countdownBehavior: CountdownBehavior = .freshStartOnly
     @Published private(set) var countdownRemaining: Int = 0
     @Published private(set) var didReachEndInStopMode: Bool = false
+    @Published private(set) var presentationElapsedSeconds: TimeInterval = 0
 
     // Visual / behavior tuning
     @Published var secondsPerLine: Double = 5
@@ -85,6 +87,13 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
     @Published var backgroundOpacity: Double = 0.58
     @Published var scrollingPaceLines: Double = 2
     @Published var scrollMode: ScrollMode = .infinite
+    @Published var showTimer: Bool = true
+    @Published var timeWarningEnabled: Bool = false
+    @Published var timeWarningDurationMinutes: Double = 5
+    @Published var timeWarningYellowThresholdMinutes: Double = 1
+    @Published var timeWarningRedThresholdMinutes: Double = 5
+    @Published var timerOverlayOffsetX: Double = 0
+    @Published var timerOverlayOffsetY: Double = 0
     /// 0 means "auto" (prefer built-in display)
     @Published var selectedScreenID: CGDirectDisplayID = 0
     // Fraction of the viewport height to fade at top and bottom.
@@ -108,11 +117,13 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
     private var transcriptConsumedTokenCount: Int = 0
     private var transcriptVisibleUTF16Range: Range<Int> = 0..<Int.max
     private var previousRecognizedTranscript = ""
+    private var presentationTimerStartedAt: Date?
 
     static let secondsPerLineRange: ClosedRange<Double> = 1...20
     static let secondsPerLineStep: Double = 1
     static let scrollingPaceLinesRange: ClosedRange<Double> = 1...10
     static let overlayHeightRange: ClosedRange<Double> = 120...720
+    static let timeWarningMinutesRange: ClosedRange<Double> = 1...100
 
     private enum DefaultsKey {
         static let hasSavedSession = "hasSavedSession"
@@ -128,6 +139,7 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
         static let transcriptLanguageIdentifier = "transcriptLanguageIdentifier"
         static let transcriptMatchConsecutiveWords = "transcriptMatchConsecutiveWords"
         static let transcriptMaxForwardLookingWords = "transcriptMaxForwardLookingWords"
+        static let fuzzyTranscriptMatching = "fuzzyTranscriptMatching"
         static let voiceDetectionThresholdDb = "voiceDetectionThresholdDb"
         static let secondsPerLine = "secondsPerLine"
         static let lineBasedSpeedMigration = "lineBasedSpeedMigration"
@@ -141,6 +153,13 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
         static let countdownSeconds = "countdownSeconds"
         static let countdownBehavior = "countdownBehavior"
         static let scrollMode = "scrollMode"
+        static let showTimer = "showTimer"
+        static let timeWarningEnabled = "timeWarningEnabled"
+        static let timeWarningDurationMinutes = "timeWarningDurationMinutes"
+        static let timeWarningYellowThresholdMinutes = "timeWarningYellowThresholdMinutes"
+        static let timeWarningRedThresholdMinutes = "timeWarningRedThresholdMinutes"
+        static let timerOverlayOffsetX = "timerOverlayOffsetX"
+        static let timerOverlayOffsetY = "timerOverlayOffsetY"
         static let selectedScreenID = "selectedScreenID"
     }
 
@@ -250,11 +269,15 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
         }
     }
 
-    func resetScroll() {
+    func resetScroll(resetTimer: Bool = true) {
         didReachEndInStopMode = false
         shouldUseCountdownOnNextStart = true
         savedScrollPhaseForResume = nil
         isManuallyPaused = false
+        if resetTimer {
+            presentationElapsedSeconds = 0
+            presentationTimerStartedAt = nil
+        }
         resetToken = UUID()
     }
 
@@ -266,6 +289,8 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
         isPausedByVoiceMonitor = false
         isVoiceResumeBlockedByMousePause = false
         didReachEndInStopMode = false
+        presentationElapsedSeconds = 0
+        presentationTimerStartedAt = nil
         hasStartedSession = false
         shouldUseCountdownOnNextStart = true
         savedScrollPhaseForResume = nil
@@ -378,6 +403,39 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
         }
     }
 
+    func tickPresentationTimer(now: Date = Date()) {
+        guard isRunning else {
+            presentationTimerStartedAt = nil
+            return
+        }
+
+        guard let startedAt = presentationTimerStartedAt else {
+            presentationTimerStartedAt = now
+            return
+        }
+
+        let delta = min(max(now.timeIntervalSince(startedAt), 0), 1.5)
+        presentationElapsedSeconds += delta
+        presentationTimerStartedAt = now
+    }
+
+    func syncDefaultTimeWarningThresholds() {
+        let duration = clamp(timeWarningDurationMinutes.rounded(), lower: Self.timeWarningMinutesRange.lowerBound, upper: Self.timeWarningMinutesRange.upperBound)
+        timeWarningDurationMinutes = duration
+        timeWarningYellowThresholdMinutes = max(1, ceil(duration * 0.8))
+        timeWarningRedThresholdMinutes = duration
+    }
+
+    func normalizeTimeWarningSettings() {
+        timeWarningDurationMinutes = clamp(timeWarningDurationMinutes.rounded(), lower: Self.timeWarningMinutesRange.lowerBound, upper: Self.timeWarningMinutesRange.upperBound)
+        timeWarningRedThresholdMinutes = clamp(timeWarningRedThresholdMinutes.rounded(), lower: Self.timeWarningMinutesRange.lowerBound, upper: Self.timeWarningMinutesRange.upperBound)
+        timeWarningYellowThresholdMinutes = clamp(
+            timeWarningYellowThresholdMinutes.rounded(),
+            lower: Self.timeWarningMinutesRange.lowerBound,
+            upper: max(timeWarningRedThresholdMinutes, 1)
+        )
+    }
+
     func start() {
         if isRunning || isCountingDown {
             return
@@ -389,7 +447,7 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
 
         if scrollMode == .stopAtEnd, didReachEndInStopMode {
             // Keyboard "start" from end should restart from the top without requiring manual reset.
-            resetScroll()
+            resetScroll(resetTimer: false)
         }
 
         let delay = max(0, countdownSeconds)
@@ -453,6 +511,7 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
         countdownRemaining = 0
         isRunning = false
         isWaitingForMicStart = false
+        presentationTimerStartedAt = nil
     }
 
     func setVoiceMonitorUnavailable(_ message: String?) {
@@ -582,11 +641,12 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
         let transcriptSearchStart = max(0, transcriptConsumedTokenCount - overlap)
 
         for transcriptStart in transcriptSearchStart..<transcriptTokens.count {
-            for scriptStart in searchStart..<searchEnd where scriptTokens[scriptStart].text == transcriptTokens[transcriptStart] {
+            for scriptStart in searchStart..<searchEnd where tokensMatch(scriptTokens[scriptStart].text, transcriptTokens[transcriptStart]) {
                 var runLength = 0
                 while transcriptStart + runLength < transcriptTokens.count,
                       scriptStart + runLength < scriptTokens.count,
-                      scriptTokens[scriptStart + runLength].text == transcriptTokens[transcriptStart + runLength] {
+                      scriptStart + runLength < searchEnd,
+                      tokensMatch(scriptTokens[scriptStart + runLength].text, transcriptTokens[transcriptStart + runLength]) {
                     runLength += 1
                 }
 
@@ -607,6 +667,50 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
         transcriptMatchedTokenIndex = matchedIndex
         transcriptConsumedTokenCount = max(transcriptConsumedTokenCount, matchedTranscriptEnd)
         return scriptProgress(at: matchedIndex, in: scriptTokens)
+    }
+
+    private func tokensMatch(_ scriptToken: String, _ transcriptToken: String) -> Bool {
+        guard scriptToken != transcriptToken else { return true }
+        guard fuzzyTranscriptMatching else { return false }
+        guard scriptToken.count > 3, transcriptToken.count > 3 else { return false }
+        guard scriptToken.unicodeScalars.allSatisfy({ !$0.isCJKToken }),
+              transcriptToken.unicodeScalars.allSatisfy({ !$0.isCJKToken }) else { return false }
+
+        let lengthDelta = abs(scriptToken.count - transcriptToken.count)
+        let maxLength = max(scriptToken.count, transcriptToken.count)
+        guard lengthDelta <= max(2, maxLength / 4) else { return false }
+
+        let distance = boundedEditDistance(scriptToken, transcriptToken, limit: maxLength >= 8 ? 2 : 1)
+        return distance <= (maxLength >= 8 ? 2 : 1)
+    }
+
+    private func boundedEditDistance(_ lhs: String, _ rhs: String, limit: Int) -> Int {
+        let lhsCharacters = Array(lhs)
+        let rhsCharacters = Array(rhs)
+        if abs(lhsCharacters.count - rhsCharacters.count) > limit {
+            return limit + 1
+        }
+
+        var previous = Array(0...rhsCharacters.count)
+        for (lhsIndex, lhsCharacter) in lhsCharacters.enumerated() {
+            var current = [lhsIndex + 1]
+            var rowMinimum = current[0]
+            for (rhsIndex, rhsCharacter) in rhsCharacters.enumerated() {
+                let cost = lhsCharacter == rhsCharacter ? 0 : 1
+                let value = min(
+                    previous[rhsIndex + 1] + 1,
+                    current[rhsIndex] + 1,
+                    previous[rhsIndex] + cost
+                )
+                current.append(value)
+                rowMinimum = min(rowMinimum, value)
+            }
+            if rowMinimum > limit {
+                return limit + 1
+            }
+            previous = current
+        }
+        return previous.last ?? limit + 1
     }
 
     private func visibleTokenRange(in scriptTokens: [ScriptTokenInfo]) -> Range<Int> {
@@ -704,7 +808,7 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
             }
             let lineIndex = max(0, lineStarts.lastIndex(where: { $0 <= start }) ?? 0)
             tokens.append(ScriptTokenInfo(
-                text: current.lowercased(),
+                text: Self.normalizedPromptToken(current),
                 range: start..<endOffset,
                 lineIndex: lineIndex
             ))
@@ -721,7 +825,7 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
             if scalar.isCJKToken {
                 flushCurrent(endingAt: start)
                 let lineIndex = max(0, lineStarts.lastIndex(where: { $0 <= start }) ?? 0)
-                tokens.append(ScriptTokenInfo(text: scalarText.lowercased(), range: start..<end, lineIndex: lineIndex))
+                tokens.append(ScriptTokenInfo(text: Self.normalizedPromptToken(scalarText), range: start..<end, lineIndex: lineIndex))
             } else if scalar.isPromptWordToken {
                 if currentStart == nil {
                     currentStart = start
@@ -735,6 +839,12 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
 
         flushCurrent(endingAt: offset)
         return tokens
+    }
+
+    private static func normalizedPromptToken(_ token: String) -> String {
+        token
+            .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+            .lowercased()
     }
 
     private func lineStartOffsets(in text: String) -> [Int] {
@@ -802,6 +912,7 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
         }
         transcriptMatchConsecutiveWords = Int(clamp(Double(defaults.object(forKey: DefaultsKey.transcriptMatchConsecutiveWords) as? Int ?? transcriptMatchConsecutiveWords), lower: 1, upper: 10))
         transcriptMaxForwardLookingWords = Int(clamp(Double(defaults.object(forKey: DefaultsKey.transcriptMaxForwardLookingWords) as? Int ?? transcriptMaxForwardLookingWords), lower: 5, upper: 100))
+        fuzzyTranscriptMatching = defaults.object(forKey: DefaultsKey.fuzzyTranscriptMatching) as? Bool ?? fuzzyTranscriptMatching
         if transcriptBasedPrompt {
             autoPauseResumeWithLocalMic = false
         }
@@ -855,6 +966,15 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
         } else {
             scrollMode = .infinite
         }
+        showTimer = defaults.object(forKey: DefaultsKey.showTimer) as? Bool ?? showTimer
+        timeWarningEnabled = defaults.object(forKey: DefaultsKey.timeWarningEnabled) as? Bool ?? timeWarningEnabled
+        timeWarningDurationMinutes = clamp(defaults.object(forKey: DefaultsKey.timeWarningDurationMinutes) as? Double ?? timeWarningDurationMinutes, lower: Self.timeWarningMinutesRange.lowerBound, upper: Self.timeWarningMinutesRange.upperBound)
+        let defaultYellowThreshold = max(1, ceil(timeWarningDurationMinutes * 0.8))
+        timeWarningYellowThresholdMinutes = clamp(defaults.object(forKey: DefaultsKey.timeWarningYellowThresholdMinutes) as? Double ?? defaultYellowThreshold, lower: Self.timeWarningMinutesRange.lowerBound, upper: Self.timeWarningMinutesRange.upperBound)
+        timeWarningRedThresholdMinutes = clamp(defaults.object(forKey: DefaultsKey.timeWarningRedThresholdMinutes) as? Double ?? timeWarningDurationMinutes, lower: Self.timeWarningMinutesRange.lowerBound, upper: Self.timeWarningMinutesRange.upperBound)
+        normalizeTimeWarningSettings()
+        timerOverlayOffsetX = defaults.object(forKey: DefaultsKey.timerOverlayOffsetX) as? Double ?? timerOverlayOffsetX
+        timerOverlayOffsetY = defaults.object(forKey: DefaultsKey.timerOverlayOffsetY) as? Double ?? timerOverlayOffsetY
         selectedScreenID = CGDirectDisplayID(defaults.object(forKey: DefaultsKey.selectedScreenID) as? UInt32 ?? 0)
     }
 
@@ -872,6 +992,7 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
         defaults.set(transcriptLanguageIdentifier, forKey: DefaultsKey.transcriptLanguageIdentifier)
         defaults.set(transcriptMatchConsecutiveWords, forKey: DefaultsKey.transcriptMatchConsecutiveWords)
         defaults.set(transcriptMaxForwardLookingWords, forKey: DefaultsKey.transcriptMaxForwardLookingWords)
+        defaults.set(fuzzyTranscriptMatching, forKey: DefaultsKey.fuzzyTranscriptMatching)
         defaults.set(voiceDetectionThresholdDb, forKey: DefaultsKey.voiceDetectionThresholdDb)
         defaults.set(secondsPerLine, forKey: DefaultsKey.secondsPerLine)
         defaults.set(fontSize, forKey: DefaultsKey.fontSize)
@@ -882,6 +1003,13 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
         defaults.set(countdownSeconds, forKey: DefaultsKey.countdownSeconds)
         defaults.set(countdownBehavior.rawValue, forKey: DefaultsKey.countdownBehavior)
         defaults.set(scrollMode.rawValue, forKey: DefaultsKey.scrollMode)
+        defaults.set(showTimer, forKey: DefaultsKey.showTimer)
+        defaults.set(timeWarningEnabled, forKey: DefaultsKey.timeWarningEnabled)
+        defaults.set(timeWarningDurationMinutes, forKey: DefaultsKey.timeWarningDurationMinutes)
+        defaults.set(timeWarningYellowThresholdMinutes, forKey: DefaultsKey.timeWarningYellowThresholdMinutes)
+        defaults.set(timeWarningRedThresholdMinutes, forKey: DefaultsKey.timeWarningRedThresholdMinutes)
+        defaults.set(timerOverlayOffsetX, forKey: DefaultsKey.timerOverlayOffsetX)
+        defaults.set(timerOverlayOffsetY, forKey: DefaultsKey.timerOverlayOffsetY)
         defaults.set(selectedScreenID, forKey: DefaultsKey.selectedScreenID)
     }
 
