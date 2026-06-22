@@ -91,6 +91,7 @@ struct OverlayView: View {
     @State private var tooltipText: String?
     @State private var resizeStartSize: CGSize?
     @State private var timerDragStartOffset: CGSize?
+    @State private var isLanguageSelectorPresented = false
 
     var body: some View {
         // Ratio-driven contour tuned to Apple notch geometry and scaled to the
@@ -101,14 +102,54 @@ struct OverlayView: View {
         ZStack {
             VisualEffectView(material: .hudWindow, blendingMode: .withinWindow)
                 .clipShape(shape)
-                // Blur can brighten the surface; keep it effectively off for notch matching.
-                .opacity(0.0)
+                .opacity(0.68)
 
             shape
-                .fill(Color(.sRGB, red: 0, green: 0, blue: 0, opacity: model.backgroundOpacity))
+                .fill(Color.black.opacity(max(model.backgroundOpacity * 0.78, 0.26)))
 
             shape
-                .strokeBorder(Color.white.opacity(0.05), lineWidth: 1)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            .white.opacity(0.18),
+                            .white.opacity(0.05),
+                            .blue.opacity(0.04),
+                            .clear
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+                .blendMode(.screen)
+
+            shape
+                .fill(
+                    RadialGradient(
+                        colors: [
+                            .white.opacity(0.16),
+                            .white.opacity(0.04),
+                            .clear
+                        ],
+                        center: .topLeading,
+                        startRadius: 12,
+                        endRadius: max(model.overlayWidth, model.overlayHeight) * 0.7
+                    )
+                )
+                .blendMode(.screen)
+
+            shape
+                .strokeBorder(
+                    LinearGradient(
+                        colors: [
+                            .white.opacity(0.34),
+                            .white.opacity(0.08),
+                            .black.opacity(0.20)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ),
+                    lineWidth: 1
+                )
                 // Hard-cut the stroke off at the very top so the edge blends into the notch.
                 .mask(
                     VStack(spacing: 0) {
@@ -212,11 +253,7 @@ struct OverlayView: View {
                     }
                     .padding(.horizontal, 8)
                     .padding(.vertical, 6)
-                    .background(Color.black.opacity(0.7), in: Capsule())
-                    .overlay(
-                        Capsule()
-                            .stroke(Color.white.opacity(0.12), lineWidth: 1)
-                    )
+                    .liquidCapsule(opacity: 0.56)
                     
                     Spacer(minLength: 8)
                     
@@ -249,11 +286,7 @@ struct OverlayView: View {
                     }
                     .padding(.horizontal, 8)
                     .padding(.vertical, 6)
-                    .background(Color.black.opacity(0.7), in: Capsule())
-                    .overlay(
-                        Capsule()
-                            .stroke(Color.white.opacity(0.12), lineWidth: 1)
-                    )
+                    .liquidCapsule(opacity: 0.56)
                 }
                 .padding(.horizontal, 10)
                 .padding(.top, 8)
@@ -316,6 +349,7 @@ struct OverlayView: View {
             .opacity(timerTextOpacity)
             .padding(.horizontal, 9)
             .padding(.vertical, 5)
+            .liquidCapsule(opacity: 0.46)
             .shadow(color: .black.opacity(0.65), radius: 3, x: 0, y: 1)
             .contentShape(Rectangle())
             .offset(x: model.timerOverlayOffsetX, y: model.timerOverlayOffsetY)
@@ -394,10 +428,11 @@ struct OverlayView: View {
                     .frame(width: statusLeadingLabelWidth, alignment: .leading)
 
                 unifiedStatusArea
+                    .layoutPriority(1)
             }
-            .padding(.horizontal, 12)
+            .padding(.horizontal, statusHorizontalPadding)
             .padding(.vertical, 5)
-            .background(Color.black.opacity(0.52), in: Capsule())
+            .liquidCapsule(opacity: 0.46)
             .padding(.horizontal, 18)
             .padding(.bottom, 8)
         }
@@ -444,7 +479,7 @@ struct OverlayView: View {
             .font(.system(size: max(11, model.fontSize * 0.58), weight: weight))
             .foregroundStyle(color)
             .lineLimit(1)
-            .truncationMode(.tail)
+            .truncationMode(.head)
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 
@@ -461,26 +496,25 @@ struct OverlayView: View {
             .font(.system(size: 10, weight: .semibold))
             .lineLimit(1)
         } else if model.transcriptBasedPrompt {
-            Menu {
-                Picker("Speech recognition language", selection: $model.transcriptLanguageIdentifier) {
-                    Text("Auto (\(model.detectedTranscriptLanguageLabel))").tag("auto")
-                    ForEach(PrompterModel.transcriptLanguageOptions.filter { $0.id != "auto" }) { option in
-                        Text(option.label).tag(option.id)
-                    }
-                }
+            Button {
+                isLanguageSelectorPresented = true
             } label: {
-                Text(model.effectiveTranscriptLanguageLabel)
-                    .foregroundStyle(.blue)
-                    .overlay(alignment: .trailing) {
-                        Image(systemName: "chevron.down")
-                            .font(.system(size: 8, weight: .bold))
-                            .foregroundStyle(.white.opacity(0.58))
-                            .padding(.trailing, 2)
-                    }
-                    .font(.system(size: 10, weight: .semibold))
-                    .lineLimit(1)
+                HStack(spacing: 3) {
+                    Text(model.effectiveTranscriptLanguageLabel)
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundStyle(.white.opacity(0.58))
+                }
+                .foregroundStyle(.blue)
+                .font(.system(size: 10, weight: .semibold))
+                .lineLimit(1)
+                .padding(.vertical, 6)
+                .contentShape(Rectangle())
             }
-            .menuStyle(.borderlessButton)
+            .buttonStyle(.plain)
+            .popover(isPresented: $isLanguageSelectorPresented, arrowEdge: .bottom) {
+                transcriptLanguageSelectionPopover
+            }
         } else {
             Text("Speed:")
                 .foregroundStyle(.white.opacity(0.72))
@@ -494,9 +528,54 @@ struct OverlayView: View {
             return 82
         }
         if model.transcriptBasedPrompt {
-            return 108
+            return 74
         }
         return 58
+    }
+
+    private var statusHorizontalPadding: CGFloat {
+        12
+    }
+
+    private var transcriptLanguageSelectionPopover: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Speech recognition language")
+                .font(.headline)
+                .padding(.bottom, 4)
+
+            languageSelectionButton(
+                id: "auto",
+                label: "Auto (\(model.detectedTranscriptLanguageLabel))"
+            )
+
+            Divider()
+
+            ForEach(PrompterModel.transcriptLanguageOptions.filter { $0.id != "auto" }) { option in
+                languageSelectionButton(id: option.id, label: option.label)
+            }
+        }
+        .padding(12)
+        .frame(width: 240)
+    }
+
+    private func languageSelectionButton(id: String, label: String) -> some View {
+        Button {
+            model.transcriptLanguageIdentifier = id
+            isLanguageSelectorPresented = false
+        } label: {
+            HStack {
+                Text(label)
+                    .lineLimit(1)
+                Spacer()
+                if model.transcriptLanguageIdentifier == id {
+                    Image(systemName: "checkmark")
+                        .foregroundStyle(.blue)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(.vertical, 4)
     }
 
     private var resizeHandle: some View {
@@ -533,6 +612,44 @@ struct OverlayView: View {
         }
         .padding(.trailing, 4)
         .padding(.bottom, 4)
+    }
+}
+
+private extension View {
+    func liquidCapsule(opacity: Double) -> some View {
+        self
+            .background(.ultraThinMaterial, in: Capsule())
+            .background(
+                Capsule()
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                .white.opacity(0.14),
+                                .black.opacity(opacity),
+                                .blue.opacity(0.06)
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+            )
+            .overlay(
+                Capsule()
+                    .stroke(
+                        LinearGradient(
+                            colors: [
+                                .white.opacity(0.30),
+                                .white.opacity(0.08),
+                                .black.opacity(0.18)
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        ),
+                        lineWidth: 1
+                    )
+            )
+            .shadow(color: .black.opacity(0.32), radius: 8, x: 0, y: 3)
+            .shadow(color: .white.opacity(0.06), radius: 1, x: 0, y: 1)
     }
 }
 

@@ -744,7 +744,10 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
         }
         previousRecognizedTranscript = transcript
 
-        let maxCharacters = max(10, Int(overlayWidth / max(fontSize * 0.42, 7)))
+        let statusLeadingLabelWidth: Double = transcriptBasedPrompt ? 74 : (autoPauseResumeWithLocalMic ? 82 : 58)
+        let statusLaneWidth = max(80, overlayWidth - 36 - 24 - 10 - statusLeadingLabelWidth)
+        let statusFontSize = max(11, fontSize * 0.58)
+        let maxCharacters = max(8, Int(statusLaneWidth / max(statusFontSize * 0.54, 7)))
         for chunk in transcriptDisplayChunks(from: delta) {
             guard !chunk.isEmpty else { continue }
             let separator = recognizedTranscriptDisplayLine.isEmpty || chunk.count == 1 ? "" : " "

@@ -155,6 +155,7 @@ struct PresentationCompanionView: View {
     @AppStorage("ios.promptToolbarOpacity") private var promptToolbarOpacity: Double = 1
     @State private var promptToolbarDragStartOffset: CGSize?
     @State private var timerOverlayDragStartOffset: CGSize?
+    @State private var isLanguageSelectorPresented = false
     @FocusState private var isScriptFocused: Bool
 
     private var timerInterval: TimeInterval {
@@ -306,8 +307,7 @@ struct PresentationCompanionView: View {
 
     private var presentationForegroundSurface: some View {
         ZStack {
-            Color.black
-                .ignoresSafeArea()
+            liquidPromptBackground
 
             VStack(spacing: 0) {
                 promptSurface
@@ -325,6 +325,36 @@ struct PresentationCompanionView: View {
         }
     }
 
+    private var liquidPromptBackground: some View {
+        ZStack {
+            Color.black
+
+            LinearGradient(
+                colors: [
+                    .white.opacity(0.08),
+                    .black.opacity(0.88),
+                    .blue.opacity(0.06),
+                    .black.opacity(0.96)
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+
+            RadialGradient(
+                colors: [
+                    .white.opacity(0.14),
+                    .white.opacity(0.04),
+                    .clear
+                ],
+                center: .topLeading,
+                startRadius: 20,
+                endRadius: 620
+            )
+            .blendMode(.screen)
+        }
+        .ignoresSafeArea()
+    }
+
     private var shouldShowTimerIndicator: Bool {
         showTimer && isPresentationModeActive
     }
@@ -337,6 +367,7 @@ struct PresentationCompanionView: View {
             .opacity(timerTextOpacity)
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
+            .liquidCapsule(opacity: 0.46)
             .shadow(color: .black.opacity(0.65), radius: 3, x: 0, y: 1)
             .contentShape(Rectangle())
             .offset(x: timerOverlayOffsetX, y: timerOverlayOffsetY)
@@ -436,11 +467,7 @@ struct PresentationCompanionView: View {
         .foregroundStyle(.white)
         .padding(.horizontal, 22)
         .padding(.vertical, 18)
-        .background(.black.opacity(0.72), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(.white.opacity(0.16), lineWidth: 1)
-        )
+        .liquidRoundedRectangle(cornerRadius: 14, opacity: 0.62)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
         .allowsHitTesting(false)
     }
@@ -448,7 +475,7 @@ struct PresentationCompanionView: View {
     private var promptSurface: some View {
         GeometryReader { viewportProxy in
             ZStack(alignment: .topLeading) {
-                Color.black
+                Color.clear
 
                 Text(attributedPromptText)
                     .font(.system(size: fontSize, weight: .regular, design: .rounded))
@@ -544,14 +571,32 @@ struct PresentationCompanionView: View {
             statusLeadingLabel
                 .frame(width: statusLeadingLabelWidth, alignment: .leading)
             unifiedStatusArea
+                .layoutPriority(1)
         }
-        .padding(.horizontal, 14)
+        .padding(.horizontal, statusHorizontalPadding)
         .padding(.vertical, 8)
         .frame(maxWidth: .infinity, minHeight: 48)
-        .background(.black)
+        .background(.ultraThinMaterial)
+        .background(
+            LinearGradient(
+                colors: [
+                    .white.opacity(0.07),
+                    .black.opacity(0.64),
+                    .blue.opacity(0.04)
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        )
         .overlay(alignment: .top) {
             Rectangle()
-                .fill(.white.opacity(0.10))
+                .fill(
+                    LinearGradient(
+                        colors: [.white.opacity(0.22), .white.opacity(0.04)],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                )
                 .frame(height: 1)
         }
         .contentShape(Rectangle())
@@ -577,7 +622,7 @@ struct PresentationCompanionView: View {
             .foregroundStyle(color)
             .font(.system(size: max(12, fontSize * 0.45), weight: weight))
             .lineLimit(1)
-            .truncationMode(.tail)
+            .truncationMode(.head)
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 
@@ -594,13 +639,8 @@ struct PresentationCompanionView: View {
             .font(.system(size: 11, weight: .semibold))
             .lineLimit(1)
         } else if transcriptBasedPrompt {
-            Menu {
-                Picker("Speech recognition language", selection: $transcriptLanguageIdentifier) {
-                    Text("Auto (\(transcriptLanguageLabel(for: detectedTranscriptLanguageIdentifier)))").tag("auto")
-                    ForEach(transcriptLanguageOptions.filter { $0.id != "auto" }) { option in
-                        Text(option.label).tag(option.id)
-                    }
-                }
+            Button {
+                isLanguageSelectorPresented = true
             } label: {
                 HStack(spacing: 3) {
                     Text(transcriptLanguageLabel(for: effectiveTranscriptLanguageIdentifier))
@@ -615,6 +655,23 @@ struct PresentationCompanionView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .confirmationDialog(
+                "Speech recognition language",
+                isPresented: $isLanguageSelectorPresented,
+                titleVisibility: .visible
+            ) {
+                Button("Auto (\(transcriptLanguageLabel(for: detectedTranscriptLanguageIdentifier)))") {
+                    transcriptLanguageIdentifier = "auto"
+                }
+
+                ForEach(transcriptLanguageOptions.filter { $0.id != "auto" }) { option in
+                    Button(option.label) {
+                        transcriptLanguageIdentifier = option.id
+                    }
+                }
+
+                Button("Cancel", role: .cancel) {}
+            }
         } else {
             Text("Speed:")
                 .foregroundStyle(.white.opacity(0.72))
@@ -628,9 +685,13 @@ struct PresentationCompanionView: View {
             return 86
         }
         if transcriptBasedPrompt {
-            return 108
+            return 78
         }
         return 58
+    }
+
+    private var statusHorizontalPadding: CGFloat {
+        14
     }
 
     private var floatingPromptToolbar: some View {
@@ -746,11 +807,7 @@ struct PresentationCompanionView: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
-        .background(.black.opacity(0.78), in: Capsule())
-        .overlay(
-            Capsule()
-                .stroke(.white.opacity(0.12), lineWidth: 1)
-        )
+        .liquidCapsule(opacity: 0.58)
         .shadow(color: .black.opacity(0.26), radius: 14, x: 0, y: 8)
         .opacity(promptToolbarOpacity)
     }
@@ -1893,7 +1950,12 @@ struct PresentationCompanionView: View {
         }
         previousRecognizedTranscript = transcript
 
-        let maxCharacters = max(10, Int(promptMeasurementTextWidth / max(fontSize * 0.32, 8)))
+        let statusLaneWidth = max(
+            80,
+            promptMeasurementTextWidth + 48 - (statusHorizontalPadding * 2) - statusLeadingLabelWidth - 8
+        )
+        let statusFontSize = max(12, fontSize * 0.45)
+        let maxCharacters = max(8, Int(statusLaneWidth / max(statusFontSize * 0.54, 7)))
         for chunk in transcriptDisplayChunks(from: delta) {
             guard !chunk.isEmpty else { continue }
             let separator = recognizedTranscriptDisplayLine.isEmpty || chunk.count == 1 ? "" : " "
@@ -2103,6 +2165,79 @@ struct PresentationCompanionView: View {
         } else {
             shouldShowSettingsSurface = true
         }
+    }
+}
+
+private extension View {
+    func liquidCapsule(opacity: Double) -> some View {
+        self
+            .background(.ultraThinMaterial, in: Capsule())
+            .background(
+                Capsule()
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                .white.opacity(0.16),
+                                .black.opacity(opacity),
+                                .blue.opacity(0.07)
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+            )
+            .overlay(
+                Capsule()
+                    .stroke(
+                        LinearGradient(
+                            colors: [
+                                .white.opacity(0.32),
+                                .white.opacity(0.08),
+                                .black.opacity(0.18)
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        ),
+                        lineWidth: 1
+                    )
+            )
+            .shadow(color: .black.opacity(0.34), radius: 10, x: 0, y: 4)
+            .shadow(color: .white.opacity(0.06), radius: 1, x: 0, y: 1)
+    }
+
+    func liquidRoundedRectangle(cornerRadius: CGFloat, opacity: Double) -> some View {
+        self
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+            .background(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                .white.opacity(0.14),
+                                .black.opacity(opacity),
+                                .blue.opacity(0.06)
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .stroke(
+                        LinearGradient(
+                            colors: [
+                                .white.opacity(0.30),
+                                .white.opacity(0.08),
+                                .black.opacity(0.18)
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        ),
+                        lineWidth: 1
+                    )
+            )
+            .shadow(color: .black.opacity(0.32), radius: 12, x: 0, y: 5)
     }
 }
 
