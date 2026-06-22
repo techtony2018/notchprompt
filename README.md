@@ -8,18 +8,12 @@ Native teleprompter companion for presentations and recordings. The macOS app
 uses a notch-adjacent overlay, and the iOS app uses a full-screen in-app prompt
 with the same core playback and voice controls.
 
-## Quick Demo
+## Quick Look
 
-> Demo assets below are placeholders. Replace with real captures before public
-> launch.
+![macOS prompt overlay with transcript highlighting and timer](assets/readme/macos-prompt-overlay.png)
 
-<!--
-![Presentation Companion hero screenshot](docs/media/hero.png)
-*Hero view of the overlay panel and settings workflow.*
-
-![Presentation Companion scrolling demo GIF](docs/media/notchprompt-demo.gif)
-*In-use scrolling demo with start/pause and speed adjustments.*
--->
+Presentation Companion keeps the prompt close to the camera, shows the active
+timer, and keeps language or voice status pinned to the bottom status area.
 
 ## Features
 
@@ -54,6 +48,10 @@ with the same core playback and voice controls.
 - Voice-triggered resume is blocked after a mouse pause until you click to resume, so Q&A audio does not restart the script.
 - Privacy mode (`NSWindow.SharingType`, best-effort/app-dependent).
 
+![macOS playback and speech settings](assets/readme/macos-settings-playback.png)
+
+![macOS timing and appearance settings](assets/readme/macos-settings-timing.png)
+
 ### iOS
 
 - Settings is the landing window; a floating `Present` button switches immediately into full-screen prompting.
@@ -66,6 +64,12 @@ with the same core playback and voice controls.
 - When voice-driven pause/resume is enabled, a fresh start waits after countdown and shows `Start talking to move prompt forward`.
 - App settings are persisted on device.
 
+![iOS Presentation Script editor with loaded link](assets/readme/ios-settings-script.png)
+
+![iOS playback and presentation timing settings](assets/readme/ios-settings-playback-timing.png)
+
+![iOS prompt screen over loaded web content](assets/readme/ios-prompt-link-loaded.png)
+
 ## Requirements
 
 - macOS version supported by the current deployment target in
@@ -75,7 +79,7 @@ with the same core playback and voice controls.
 
 ## Version
 
-Current version: V1.0.88.
+Current version: V1.0.113.
 
 ## Install (Recommended)
 
