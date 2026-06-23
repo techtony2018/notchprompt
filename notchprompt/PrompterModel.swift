@@ -354,6 +354,15 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
         resetToken = UUID()
     }
 
+    func restartLoopFromBeginning() {
+        didReachEndInStopMode = false
+        savedScrollPhaseForResume = nil
+        didResetPrompt = false
+        resetTranscriptProgress()
+        scriptProgressCharacterEnd = 0
+        resetToken = UUID()
+    }
+
     func resetToFreshStart() {
         stopReadScriptAloud()
         stop()
@@ -534,6 +543,7 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
     nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
         Task { @MainActor in
             if self.shouldLoopSpeechAfterFinish, self.scrollMode == .infinite {
+                self.restartLoopFromBeginning()
                 self.speakScript(fromUTF16Offset: 0)
                 return
             }
@@ -735,6 +745,9 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
         transcriptSpokenCharacterEnd = progress.spokenCharacterEnd
         scriptProgressCharacterEnd = progress.spokenCharacterEnd
         transcriptProgressToken = UUID()
+        if scrollMode == .infinite, isTranscriptMatchedToLastScriptToken() {
+            restartLoopFromBeginning()
+        }
     }
 
     func updateTranscriptVisibleUTF16Range(_ range: Range<Int>) {
@@ -969,6 +982,12 @@ Tip: Use the menu bar icon to start/pause or reset the scroll.
         let completedOffset = completedLine >= 0 && completedLine < lineEndOffsets.count ? lineEndOffsets[completedLine] : 0
         let fraction = script.utf16.isEmpty ? 0 : Double(completedOffset) / Double(script.utf16.count)
         return (min(max(fraction, 0), 1), min(max(spokenEnd, 0), script.utf16.count))
+    }
+
+    private func isTranscriptMatchedToLastScriptToken() -> Bool {
+        let scriptTokens = scriptTokenInfos(in: script)
+        guard !scriptTokens.isEmpty else { return false }
+        return transcriptMatchedTokenIndex >= scriptTokens.count - 1
     }
 
     private func normalizedTokens(_ text: String) -> [String] {

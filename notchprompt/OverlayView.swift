@@ -225,6 +225,11 @@ struct OverlayView: View {
                     if model.isRunning {
                         model.markReachedEndInStopMode()
                     }
+                },
+                onLoopRestart: {
+                    if model.isRunning, model.scrollMode == .infinite {
+                        model.restartLoopFromBeginning()
+                    }
                 }
             )
             .padding(.horizontal, 18)
@@ -372,11 +377,20 @@ struct OverlayView: View {
     }
 
     private var shouldShowTimerIndicator: Bool {
-        model.showTimer && model.hasStartedSession
+        model.showTimer &&
+            (model.hasStartedSession ||
+             model.isRunning ||
+             model.isCountingDown ||
+             model.isWaitingForMicStart ||
+             model.presentationElapsedSeconds > 0)
     }
 
     private var timerIndicator: some View {
-        Text(timerText)
+        let clampedOffset = clampedTimerOffset(
+            x: model.timerOverlayOffsetX,
+            y: model.timerOverlayOffsetY
+        )
+        return Text(timerText)
             .font(.system(size: 12, weight: .semibold, design: .rounded))
             .monospacedDigit()
             .foregroundStyle(timerColor)
@@ -386,7 +400,7 @@ struct OverlayView: View {
             .liquidCapsule(opacity: 0.46)
             .shadow(color: .black.opacity(0.65), radius: 3, x: 0, y: 1)
             .contentShape(Rectangle())
-            .offset(x: model.timerOverlayOffsetX, y: model.timerOverlayOffsetY)
+            .offset(x: clampedOffset.width, y: clampedOffset.height)
             .gesture(timerDragGesture)
             .padding(.trailing, 14)
             .padding(.top, 46)
@@ -401,12 +415,40 @@ struct OverlayView: View {
                     height: model.timerOverlayOffsetY
                 )
                 timerDragStartOffset = startOffset
-                model.timerOverlayOffsetX = Double(startOffset.width + value.translation.width)
-                model.timerOverlayOffsetY = Double(startOffset.height + value.translation.height)
+                let clampedOffset = clampedTimerOffset(
+                    x: Double(startOffset.width + value.translation.width),
+                    y: Double(startOffset.height + value.translation.height)
+                )
+                model.timerOverlayOffsetX = Double(clampedOffset.width)
+                model.timerOverlayOffsetY = Double(clampedOffset.height)
             }
             .onEnded { _ in
+                let clampedOffset = clampedTimerOffset(
+                    x: model.timerOverlayOffsetX,
+                    y: model.timerOverlayOffsetY
+                )
+                model.timerOverlayOffsetX = Double(clampedOffset.width)
+                model.timerOverlayOffsetY = Double(clampedOffset.height)
                 timerDragStartOffset = nil
             }
+    }
+
+    private func clampedTimerOffset(x: Double, y: Double) -> CGSize {
+        let estimatedTimerWidth: CGFloat = model.timeWarningEnabled ? 126 : 62
+        let estimatedTimerHeight: CGFloat = 28
+        let horizontalMargin: CGFloat = 28
+        let verticalTop: CGFloat = 46
+        let verticalBottom: CGFloat = 42
+
+        let minX = -max(0, CGFloat(model.overlayWidth) - estimatedTimerWidth - horizontalMargin)
+        let maxX: CGFloat = 0
+        let minY: CGFloat = 0
+        let maxY = max(0, CGFloat(model.overlayHeight) - verticalTop - verticalBottom - estimatedTimerHeight)
+
+        return CGSize(
+            width: min(max(CGFloat(x), minX), maxX),
+            height: min(max(CGFloat(y), minY), maxY)
+        )
     }
 
     private var timerText: String {

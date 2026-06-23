@@ -17,6 +17,7 @@ private let speechVolumeRange: ClosedRange<Double> = 0...1
 private final class ScriptSpeaker: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
     @Published var isReading = false
     @Published var isPaused = false
+    var onLoopRestart: (() -> Void)?
     private let synthesizer = AVSpeechSynthesizer()
     private var fullScript = ""
     private var voiceIdentifier: String?
@@ -176,6 +177,7 @@ private final class ScriptSpeaker: NSObject, ObservableObject, AVSpeechSynthesiz
 
     func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
         if shouldLoopAfterFinish {
+            onLoopRestart?()
             speak(fromUTF16Offset: 0)
             return
         }
@@ -403,6 +405,9 @@ struct PresentationCompanionView: View {
                 setPromptTextWidth(max(proxy.size.width - 48, 1))
                 refreshDetectedTranscriptLanguage()
                 refreshScriptAnalysis()
+                scriptSpeaker.onLoopRestart = {
+                    restartLoopFromBeginning()
+                }
                 migrateLineBasedPlaybackDefaultsIfNeeded()
                 normalizeVoiceModeSelection()
                 normalizeSpeechVoiceSelection()
@@ -1785,6 +1790,19 @@ struct PresentationCompanionView: View {
         shouldUseCountdownOnNextStart = true
     }
 
+    private func restartLoopFromBeginning() {
+        scrollOffset = 0
+        transcriptSpokenCharacterEnd = 0
+        transcriptMatchedTokenIndex = -1
+        transcriptConsumedTokenCount = 0
+        transcriptVisibleUTF16Range = 0..<Int.max
+        previousRecognizedTranscript = ""
+        recognizedTranscriptDisplayLine = ""
+        voiceMonitor.resetTranscriptState()
+        lastTickDate = nil
+        didResetPrompt = false
+    }
+
     private func openSettings() {
         isScriptFocused = false
         isPresentationModeActive = false
@@ -1910,12 +1928,7 @@ struct PresentationCompanionView: View {
         }
 
         if scrollMode == .infinite, isRunning, scrollOffset >= maxOffset {
-            scrollOffset = 0
-            if transcriptBasedPrompt {
-                transcriptSpokenCharacterEnd = 0
-                transcriptMatchedTokenIndex = -1
-                transcriptConsumedTokenCount = 0
-            }
+            restartLoopFromBeginning()
             return
         }
 
@@ -2141,6 +2154,10 @@ struct PresentationCompanionView: View {
         let progress = transcriptProgress(for: transcript)
         transcriptSpokenCharacterEnd = progress.spokenCharacterEnd
         guard progress.spokenCharacterEnd > 0 else { return }
+        if scrollMode == .infinite, isTranscriptMatchedToLastScriptToken() {
+            restartLoopFromBeginning()
+            return
+        }
         applyTranscriptViewportAnchor(spokenCharacterEnd: progress.spokenCharacterEnd)
     }
 
@@ -2165,6 +2182,12 @@ struct PresentationCompanionView: View {
         guard matchedTokenIndex >= 0, matchedTokenIndex < scriptTokens.count else { return 0 }
         let contextIndex = max(0, matchedTokenIndex - wordCount + 1)
         return scriptTokens[contextIndex].range.lowerBound
+    }
+
+    private func isTranscriptMatchedToLastScriptToken() -> Bool {
+        let scriptTokens = scriptTokenCache.isEmpty ? scriptTokenInfos(in: script) : scriptTokenCache
+        guard !scriptTokens.isEmpty else { return false }
+        return transcriptMatchedTokenIndex >= scriptTokens.count - 1
     }
 
     private func transcriptProgressFraction(for transcript: String) -> Double {

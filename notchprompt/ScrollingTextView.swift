@@ -36,6 +36,7 @@ struct ScrollingTextView: View {
     let onSaveScrollPhaseForResume: ((CGFloat) -> Void)?
     let onVisibleUTF16RangeChanged: ((Range<Int>) -> Void)?
     let onReachedEnd: (() -> Void)?
+    let onLoopRestart: (() -> Void)?
 
     private static let loopGap: CGFloat = 24
     private static let activeTickInterval: TimeInterval = 1.0 / 60.0
@@ -130,6 +131,11 @@ struct ScrollingTextView: View {
         let bottomReadabilityInset = topFadeClearInset + readabilityPadding
         let lastLinePhase = contentHeight - max(0, viewportHeight - bottomReadabilityInset)
         return max(topOfScriptPhaseFloor, lastLinePhase)
+    }
+
+    private var infiniteLoopRestartPhase: CGFloat? {
+        guard hasMeasuredContentHeight, contentHeight > viewportHeight else { return nil }
+        return endPhase
     }
 
     private func repetitionCount(for viewportHeight: CGFloat) -> Int {
@@ -331,6 +337,18 @@ struct ScrollingTextView: View {
         targetSpeedMultiplier = desired
     }
 
+    private func restartInfiniteLoopAtTop() {
+        phase = topOfScriptPhaseFloor
+        hasReachedEndInStopMode = false
+        deferredStopTargetPhase = nil
+        hasLoopedOnceInInfiniteMode = false
+        lastTickDate = nil
+        let desired = desiredSpeedMultiplier()
+        currentSpeedMultiplier = desired
+        targetSpeedMultiplier = desired
+        onLoopRestart?()
+    }
+
     private func restoreOrResetPhase() {
         guard hasStartedSession, let saved = savedScrollPhaseForResume else {
             resetPhase()
@@ -515,8 +533,12 @@ struct ScrollingTextView: View {
             }
 
             phase += scrollPointsPerSecond * CGFloat(currentSpeedMultiplier) * step
-            if scrollMode == .infinite, phase >= cycleLength {
-                hasLoopedOnceInInfiniteMode = true
+            if scrollMode == .infinite,
+               let restartPhase = infiniteLoopRestartPhase,
+               phase >= restartPhase {
+                restartInfiniteLoopAtTop()
+                remaining = 0
+                break
             }
 
             // Lazily compute the stop target on the first tick after entering
